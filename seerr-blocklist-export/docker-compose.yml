@@ -1,0 +1,28 @@
+# Seerr Blocklist Export Service
+# Standalone service for exporting Seerr blacklist to JSON
+# Deploy this on Saturn in the kometa-listsync stack
+
+version: "3.8"
+
+services:
+  seerr-blocklist-export:
+    build: .
+    container_name: seerr-blocklist-export
+    environment:
+      - SEERR_URL=${SEERR_URL:-http://jellyseerr:5055}
+      - SEERR_API_KEY=${SEERR_API_KEY}
+      - OUTPUT_FILE=/data/blocklist.json
+      - LOG_LEVEL=INFO
+      - TZ=Europe/Zurich
+    volumes:
+      - /volume1/docker/listsync/data:/data
+    networks:
+      - arr
+    restart: "no"  # Run once, don't restart
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+
+networks:
+  arr:
+    external: true
+
