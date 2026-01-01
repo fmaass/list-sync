@@ -83,6 +83,10 @@ class BlocklistManager:
             return True
         
         try:
+            # Ensure blocklist_path is a Path object
+            if not isinstance(self.blocklist_path, Path):
+                self.blocklist_path = Path(self.blocklist_path)
+            
             if not self.blocklist_path.exists():
                 logger.warning(f"Blocklist file not found: {self.blocklist_path}")
                 logger.warning("Continuing without blocklist - all items will be processed")
@@ -180,6 +184,10 @@ class BlocklistManager:
         Returns:
             Dictionary with blocklist stats
         """
+        # Ensure blocklist_path is a Path object
+        if not isinstance(self.blocklist_path, Path):
+            self.blocklist_path = Path(self.blocklist_path)
+        
         return {
             'enabled': self.enabled,
             'loaded': self.loaded_at is not None,
