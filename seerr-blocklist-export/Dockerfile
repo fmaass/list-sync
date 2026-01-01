@@ -18,7 +18,7 @@ RUN chmod +x export_seerr_blocklist.py
 RUN mkdir -p /data
 
 # Environment defaults
-ENV SEERR_URL=http://jellyseerr:5055 \
+ENV RADARR_URL=http://radarr:7878 \
     OUTPUT_FILE=/data/blocklist.json \
     LOG_LEVEL=INFO
 

@@ -9,8 +9,8 @@ services:
     build: .
     container_name: seerr-blocklist-export
     environment:
-      - SEERR_URL=${SEERR_URL:-http://jellyseerr:5055}
-      - SEERR_API_KEY=${SEERR_API_KEY}
+      - RADARR_URL=${RADARR_URL:-http://radarr:7878}
+      - RADARR_API_KEY=${RADARR_API_KEY}
       - OUTPUT_FILE=/data/blocklist.json
       - LOG_LEVEL=INFO
       - TZ=Europe/Zurich

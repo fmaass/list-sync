@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
-Seerr Blocklist Export Service
--------------------------------
-Exports Seerr's blacklist to a JSON file for consumption by list-sync.
+Radarr Exclusions Export Service
+---------------------------------
+Exports Radarr's exclusion list to a JSON file for consumption by list-sync.
 
 This service:
-1. Connects to Seerr API
-2. Fetches all blacklisted items (movies and TV shows)
+1. Connects to Radarr API
+2. Fetches all import exclusions (blocked movies)
 3. Exports TMDB IDs to a JSON file
 4. Runs on a schedule (via cron or manual trigger)
 
+Why Radarr instead of Seerr:
+- Radarr exclusions are the SOURCE OF TRUTH (~120 items)
+- Seerr syncs FROM Radarr (but may not be up to date)
+- Direct from Radarr ensures we get all exclusions
+
 Environment Variables:
-    SEERR_URL: Seerr API base URL (e.g., http://jellyseerr:5055)
-    SEERR_API_KEY: Seerr API key
+    RADARR_URL: Radarr API base URL (e.g., http://radarr:7878)
+    RADARR_API_KEY: Radarr API key
     OUTPUT_FILE: Path to output JSON file (default: /data/blocklist.json)
     LOG_LEVEL: Logging level (default: INFO)
 
@@ -31,8 +36,8 @@ from typing import Dict, List, Optional
 import requests
 
 # Configuration from environment
-SEERR_URL = os.getenv("SEERR_URL", "http://jellyseerr:5055")
-SEERR_API_KEY = os.getenv("SEERR_API_KEY")
+RADARR_URL = os.getenv("RADARR_URL", "http://radarr:7878")
+RADARR_API_KEY = os.getenv("RADARR_API_KEY")
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "/data/blocklist.json")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
@@ -47,18 +52,18 @@ logging.basicConfig(
 logger = logging.getLogger("seerr-blocklist-export")
 
 
-class SeerrBlocklistExporter:
-    """Exports Seerr blacklist to JSON file"""
+class RadarrExclusionsExporter:
+    """Exports Radarr exclusions to JSON file"""
     
-    def __init__(self, seerr_url: str, api_key: str):
+    def __init__(self, radarr_url: str, api_key: str):
         """
         Initialize exporter.
         
         Args:
-            seerr_url: Base URL of Seerr instance
-            api_key: Seerr API key
+            radarr_url: Base URL of Radarr instance
+            api_key: Radarr API key
         """
-        self.seerr_url = seerr_url.rstrip('/')
+        self.radarr_url = radarr_url.rstrip('/')
         self.api_key = api_key
         self.session = requests.Session()
         self.session.headers.update({
@@ -66,28 +71,26 @@ class SeerrBlocklistExporter:
             'Content-Type': 'application/json'
         })
     
-    def fetch_blacklist(self) -> List[Dict]:
+    def fetch_exclusions(self) -> List[Dict]:
         """
-        Fetch all blacklist items from Seerr API.
+        Fetch all import exclusions from Radarr API.
         
         Returns:
-            List of blacklist entries
+            List of exclusion entries
         """
         try:
-            url = f"{self.seerr_url}/api/v1/blacklist"
-            params = {'take': 10000}  # Get all items
+            url = f"{self.radarr_url}/api/v3/exclusions"
             
-            logger.info(f"Fetching blacklist from {url}")
-            response = self.session.get(url, params=params, timeout=30)
+            logger.info(f"Fetching exclusions from {url}")
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
             
-            data = response.json()
-            results = data.get('results', [])
-            logger.info(f"Fetched {len(results)} blacklist entries")
-            return results
+            exclusions = response.json()
+            logger.info(f"Fetched {len(exclusions)} exclusions from Radarr")
+            return exclusions
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch blacklist: {e}")
+            logger.error(f"Failed to fetch exclusions from Radarr: {e}")
             return []
     
     def export_to_json(self, output_path: str) -> Dict:
@@ -110,20 +113,18 @@ class SeerrBlocklistExporter:
         }
         
         try:
-            # Fetch blacklist (all items)
-            logger.info("Starting blacklist export")
-            blacklist_items = self.fetch_blacklist()
+            # Fetch exclusions from Radarr
+            logger.info("Starting exclusions export from Radarr")
+            exclusions = self.fetch_exclusions()
             
-            # Separate by media type and extract TMDB IDs
-            # Seerr uses: 'movie' or 'tv' as string values
-            movie_ids = [item['tmdbId'] for item in blacklist_items 
-                        if 'tmdbId' in item and item.get('mediaType') == 'movie']
-            tv_ids = [item['tmdbId'] for item in blacklist_items 
-                     if 'tmdbId' in item and item.get('mediaType') == 'tv']
+            # Extract TMDB IDs from Radarr exclusions
+            # Radarr exclusions are all movies
+            movie_ids = [item['tmdbId'] for item in exclusions if 'tmdbId' in item]
+            tv_ids = []  # Radarr only handles movies; Sonarr would have TV exclusions
             
-            # Log what we found for debugging
-            logger.info(f"Found {len(blacklist_items)} total items in blacklist")
-            logger.info(f"Filtered: {len(movie_ids)} movies, {len(tv_ids)} TV shows")
+            # Log what we found
+            logger.info(f"Found {len(exclusions)} total exclusions in Radarr")
+            logger.info(f"Extracted: {len(movie_ids)} movie TMDB IDs")
             
             # Remove duplicates and sort
             movie_ids = sorted(list(set(movie_ids)))
@@ -133,9 +134,9 @@ class SeerrBlocklistExporter:
             output_data = {
                 'version': '1.0',
                 'exported_at': stats['exported_at'],
-                'source': 'seerr',
+                'source': 'radarr',
                 'movies': movie_ids,
-                'tv': tv_ids,
+                'tv': tv_ids,  # Empty for Radarr (only handles movies)
                 'total_count': len(movie_ids) + len(tv_ids)
             }
             
@@ -182,16 +183,16 @@ def verify_configuration() -> bool:
     Returns:
         True if configuration is valid
     """
-    if not SEERR_API_KEY:
-        logger.error("SEERR_API_KEY environment variable not set")
+    if not RADARR_API_KEY:
+        logger.error("RADARR_API_KEY environment variable not set")
         return False
     
-    if not SEERR_URL:
-        logger.error("SEERR_URL environment variable not set")
+    if not RADARR_URL:
+        logger.error("RADARR_URL environment variable not set")
         return False
     
     logger.info(f"Configuration verified:")
-    logger.info(f"  SEERR_URL: {SEERR_URL}")
+    logger.info(f"  RADARR_URL: {RADARR_URL}")
     logger.info(f"  OUTPUT_FILE: {OUTPUT_FILE}")
     logger.info(f"  LOG_LEVEL: {LOG_LEVEL}")
     
@@ -201,7 +202,7 @@ def verify_configuration() -> bool:
 def main():
     """Main entry point"""
     logger.info("=" * 60)
-    logger.info("Seerr Blocklist Export Service")
+    logger.info("Radarr Exclusions Export Service")
     logger.info("=" * 60)
     
     # Verify configuration
@@ -210,7 +211,7 @@ def main():
         sys.exit(1)
     
     # Create exporter
-    exporter = SeerrBlocklistExporter(SEERR_URL, SEERR_API_KEY)
+    exporter = RadarrExclusionsExporter(RADARR_URL, RADARR_API_KEY)
     
     # Export blocklist
     stats = exporter.export_to_json(OUTPUT_FILE)
