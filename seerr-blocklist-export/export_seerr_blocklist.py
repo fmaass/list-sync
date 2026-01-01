@@ -115,10 +115,15 @@ class SeerrBlocklistExporter:
             blacklist_items = self.fetch_blacklist()
             
             # Separate by media type and extract TMDB IDs
+            # Seerr uses: 'movie' or 'tv' as string values
             movie_ids = [item['tmdbId'] for item in blacklist_items 
-                        if 'tmdbId' in item and item.get('mediaType') == 1]  # MediaType.MOVIE = 1
+                        if 'tmdbId' in item and item.get('mediaType') == 'movie']
             tv_ids = [item['tmdbId'] for item in blacklist_items 
-                     if 'tmdbId' in item and item.get('mediaType') == 2]  # MediaType.TV = 2
+                     if 'tmdbId' in item and item.get('mediaType') == 'tv']
+            
+            # Log what we found for debugging
+            logger.info(f"Found {len(blacklist_items)} total items in blacklist")
+            logger.info(f"Filtered: {len(movie_ids)} movies, {len(tv_ids)} TV shows")
             
             # Remove duplicates and sort
             movie_ids = sorted(list(set(movie_ids)))
