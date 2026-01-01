@@ -66,30 +66,28 @@ class SeerrBlocklistExporter:
             'Content-Type': 'application/json'
         })
     
-    def fetch_blacklist(self, media_type: str) -> List[Dict]:
+    def fetch_blacklist(self) -> List[Dict]:
         """
-        Fetch blacklist from Seerr API.
+        Fetch all blacklist items from Seerr API.
         
-        Args:
-            media_type: 'movie' or 'tv'
-            
         Returns:
             List of blacklist entries
         """
         try:
             url = f"{self.seerr_url}/api/v1/blacklist"
-            params = {'mediaType': media_type}
+            params = {'take': 10000}  # Get all items
             
-            logger.info(f"Fetching {media_type} blacklist from {url}")
+            logger.info(f"Fetching blacklist from {url}")
             response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
             
             data = response.json()
-            logger.info(f"Fetched {len(data)} {media_type} blacklist entries")
-            return data
+            results = data.get('results', [])
+            logger.info(f"Fetched {len(results)} blacklist entries")
+            return results
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch {media_type} blacklist: {e}")
+            logger.error(f"Failed to fetch blacklist: {e}")
             return []
     
     def export_to_json(self, output_path: str) -> Dict:
@@ -112,14 +110,15 @@ class SeerrBlocklistExporter:
         }
         
         try:
-            # Fetch blacklists
+            # Fetch blacklist (all items)
             logger.info("Starting blacklist export")
-            movie_blacklist = self.fetch_blacklist('movie')
-            tv_blacklist = self.fetch_blacklist('tv')
+            blacklist_items = self.fetch_blacklist()
             
-            # Extract TMDB IDs
-            movie_ids = [item['tmdbId'] for item in movie_blacklist if 'tmdbId' in item]
-            tv_ids = [item['tmdbId'] for item in tv_blacklist if 'tmdbId' in item]
+            # Separate by media type and extract TMDB IDs
+            movie_ids = [item['tmdbId'] for item in blacklist_items 
+                        if 'tmdbId' in item and item.get('mediaType') == 1]  # MediaType.MOVIE = 1
+            tv_ids = [item['tmdbId'] for item in blacklist_items 
+                     if 'tmdbId' in item and item.get('mediaType') == 2]  # MediaType.TV = 2
             
             # Remove duplicates and sort
             movie_ids = sorted(list(set(movie_ids)))
