@@ -1,0 +1,53 @@
+╔════════════════════════════════════════════════════════════════╗
+║         BLOCKLIST FEATURE - DEPLOYMENT CHECKLIST              ║
+╚════════════════════════════════════════════════════════════════╝
+
+When you're home, follow these steps:
+
+□ STEP 1: Test Export Service Locally (5 min)
+  ├─ cd seerr-blocklist-export
+  ├─ export SEERR_API_KEY=your-actual-api-key
+  ├─ ./test-local.sh
+  └─ ✓ Expected: Creates test-blocklist.json
+
+□ STEP 2: Deploy Export Service to Saturn (10 min)
+  ├─ ./deploy-to-saturn.sh
+  ├─ Wait for completion
+  └─ ✓ Expected: Cron job scheduled, blocklist.json created
+
+□ STEP 3: Build & Deploy Custom List-Sync (30 min)
+  ├─ cd /Users/fabian/projects/list-sync
+  ├─ ./scripts/build-and-deploy.sh
+  ├─ Confirm prompts if any
+  └─ ✓ Expected: Container running with custom image
+
+□ STEP 4: Verify Integration (5 min)
+  ├─ ./scripts/verify-blocklist.sh
+  └─ ✓ Expected: All checks pass
+
+□ STEP 5: Monitor First Sync (wait for next scheduled sync)
+  ├─ ssh saturn.local "sudo /usr/local/bin/docker logs -f listsync | grep BLOCKED"
+  └─ ✓ Expected: See "⛔ BLOCKED" messages
+
+□ STEP 6: Validate Results
+  ├─ Check sync summary shows blocked count
+  ├─ Verify no blocked items in Overseerr
+  └─ ✓ Expected: Zero blocked movies requested
+
+□ STEP 7: Merge to Main (when confident)
+  ├─ git checkout main
+  ├─ git merge feature/blocklist-support
+  └─ git push
+
+═══════════════════════════════════════════════════════════════
+
+ROLLBACK (if needed):
+  ./scripts/rollback.sh
+
+DOCUMENTATION:
+  • START_HERE.md - This navigation guide
+  • READY_TO_DEPLOY.md - Deployment instructions
+  • BLOCKLIST_README.md - Daily reference
+  • VERIFICATION_REPORT.md - All test results
+
+═══════════════════════════════════════════════════════════════
