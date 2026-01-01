@@ -179,6 +179,14 @@ def startup():
     ensure_data_directory_exists()
     init_database()
     init_selenium_driver()
+    
+    # Load blocklist
+    try:
+        from .blocklist import load_blocklist
+        load_blocklist()
+    except Exception as e:
+        logging.warning(f"Failed to load blocklist: {e}")
+        logging.warning("Continuing without blocklist - all items will be processed")
 
 
 def initialize_sync_interval():
@@ -514,6 +522,24 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
     season_info = f" Season {season_number}" if season_number else ""
     logging.info(f"🎬 PROCESSING: '{title}' ({year}) [{media_type}]{season_info}")
     logging.info(f"   IDs: TMDB={tmdb_id}, IMDB={imdb_id}")
+    
+    # BLOCKLIST CHECK: Filter out blocked items before processing
+    if tmdb_id:
+        from .blocklist import is_blocked
+        try:
+            tmdb_id_int = int(tmdb_id)
+            if is_blocked(tmdb_id_int, media_type):
+                logging.info(f"⛔ BLOCKED: '{title}' (TMDB: {tmdb_id_int}) - on blocklist, skipping")
+                # Save to database as "blocked"
+                source_lists = get_source_lists_from_item(item, list_type, list_id)
+                for source_list in source_lists:
+                    save_sync_result(title, media_type, imdb_id, None, 
+                                   "blocked", year, tmdb_id_int, 
+                                   source_list['type'], source_list['id'])
+                return {"title": title, "status": "blocked", "year": year, "media_type": media_type}
+        except (ValueError, TypeError):
+            # Invalid TMDB ID, continue processing
+            pass
     
     # Strip any year from the title (e.g., "Cinderella 1997" -> "Cinderella")
     # But only if there's text remaining after removal (to handle titles like "1917")

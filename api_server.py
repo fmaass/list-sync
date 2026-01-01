@@ -8367,6 +8367,48 @@ async def list_cached_images(limit: int = Query(50, ge=1, le=1000)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================================
+# Blocklist Endpoints
+# ============================================================================
+
+@app.get("/api/blocklist/stats")
+async def get_blocklist_stats():
+    """Get blocklist statistics and status"""
+    try:
+        from list_sync.blocklist import get_blocklist_stats
+        stats = get_blocklist_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting blocklist stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/blocklist/reload")
+async def reload_blocklist():
+    """Force reload blocklist from file"""
+    try:
+        from list_sync.blocklist import get_blocklist_manager
+        manager = get_blocklist_manager()
+        success = manager.reload()
+        
+        if success:
+            stats = manager.get_stats()
+            return {
+                "success": True,
+                "message": "Blocklist reloaded successfully",
+                "stats": stats
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to reload blocklist",
+                "stats": manager.get_stats()
+            }
+    except Exception as e:
+        logger.error(f"Error reloading blocklist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     print("🚀 Starting ListSync Web UI API Server...")
     print("📊 Dashboard will be available at: http://localhost:3222")

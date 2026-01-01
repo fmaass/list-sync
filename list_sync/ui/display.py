@@ -35,7 +35,8 @@ class SyncResults:
             "already_available": 0,
             "not_found": 0,
             "error": 0,
-            "skipped": 0
+            "skipped": 0,
+            "blocked": 0  # NEW: Track blocked items
         }
     
     def __str__(self):
@@ -57,7 +58,8 @@ class SyncResults:
         summary += f"✅ Requested: {self.results['requested']}\n"
         summary += f"☑️ Available: {self.results['already_available']}\n"
         summary += f"📌 Already Requested: {self.results['already_requested']}\n"
-        summary += f"⏭️ Skipped: {self.results['skipped']}\n\n"
+        summary += f"⏭️ Skipped: {self.results['skipped']}\n"
+        summary += f"⛔ Blocked: {self.results['blocked']}\n\n"
         summary += "Media Types\n"
         summary += "──────────\n"
         summary += f"Movies: {self.media_type_counts['movie']} ({self.media_type_counts['movie']/total_items*100:.1f}%)\n"
