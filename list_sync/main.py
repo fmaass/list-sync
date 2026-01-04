@@ -1724,10 +1724,32 @@ def main():
                 
                 logging.info("Setup completed! Starting sync service...")
                 print("✅ Configuration detected! Starting sync service...\n")
+                
+                # CRITICAL: Reload blocklist after setup completes
+                # The initial load in startup() happens before setup wizard,
+                # so we must reload here to ensure blocklist is active
+                try:
+                    from .blocklist import load_blocklist
+                    if load_blocklist():
+                        logging.info("✅ Blocklist reloaded after setup completion")
+                    else:
+                        logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
+                except Exception as e:
+                    logging.warning(f"Failed to reload blocklist after setup: {e}")
             else:
                 # Setup completed during the 5 second wait
                 logging.info("Setup completed during initialization wait! Starting sync service...")
                 print("✅ Configuration detected! Starting sync service...\n")
+                
+                # CRITICAL: Reload blocklist after setup completes
+                try:
+                    from .blocklist import load_blocklist
+                    if load_blocklist():
+                        logging.info("✅ Blocklist reloaded after setup completion")
+                    else:
+                        logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
+                except Exception as e:
+                    logging.warning(f"Failed to reload blocklist after setup: {e}")
         
         # Initialize sync interval (environment -> database if needed)
         sync_interval = initialize_sync_interval()
