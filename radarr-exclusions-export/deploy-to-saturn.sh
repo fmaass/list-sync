@@ -30,9 +30,17 @@ fi
 echo ""
 
 echo "Step 2: Creating .env file (secrets not in Git)..."
+# Note: You need to set RADARR_API_KEY environment variable before running
+if [ -z "$RADARR_API_KEY" ]; then
+    echo "  ❌ ERROR: RADARR_API_KEY environment variable not set"
+    echo "  Get it from: Radarr → Settings → General → Security → API Key"
+    echo "  Then run: export RADARR_API_KEY=your-key"
+    exit 1
+fi
+
 ssh saturn.local "cd $REPO_DIR/radarr-exclusions-export && cat > .env << 'EOF'
 RADARR_URL=http://radarr:7878
-RADARR_API_KEY=b96abe1b76384476b9fbf381ed6941d6
+RADARR_API_KEY=$RADARR_API_KEY
 OUTPUT_FILE=/data/blocklist.json
 LOG_LEVEL=INFO
 TZ=Europe/Zurich
