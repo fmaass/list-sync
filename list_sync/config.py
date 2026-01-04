@@ -698,11 +698,12 @@ class ConfigManager:
         return migrated_count
     
     def has_env_config(self) -> bool:
-        """Check if .env file exists and has basic configuration."""
-        if not os.path.exists('.env'):
-            return False
+        """Check if environment has basic configuration (from .env file or Docker env vars)."""
+        # Load .env if it exists
+        if os.path.exists('.env'):
+            load_dotenv()
         
-        load_dotenv()
+        # Check if required env vars are set (from .env or Docker environment)
         return bool(os.getenv('OVERSEERR_URL') and os.getenv('OVERSEERR_API_KEY'))
     
     def reload(self):
