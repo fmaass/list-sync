@@ -1703,53 +1703,89 @@ def main():
         
         # First, do a silent check (no messages)
         if not config_manager.is_setup_complete():
-            # Wait 5 seconds silently to allow migration/initialization to complete
-            logging.debug("Setup not complete on first check, waiting 5 seconds for initialization...")
-            time.sleep(5)
+            # Check if we have complete env var configuration
+            # If so, auto-migrate and skip web UI setup entirely
+            if config_manager.has_env_config():
+                logging.info("Complete environment configuration found, auto-migrating to database...")
+                print("\n⚡ Auto-configuring from environment variables...\n")
+                
+                try:
+                    # Migrate env vars to database
+                    migrated_count = config_manager.migrate_env_to_database()
+                    logging.info(f"Migrated {migrated_count} settings from environment to database")
+                    
+                    # Load lists from environment
+                    from .config import load_env_lists
+                    load_env_lists()
+                    
+                    # Mark setup as complete
+                    config_manager.mark_setup_complete()
+                    logging.info("Auto-setup complete, marked database as configured")
+                    
+                    # CRITICAL: Load blocklist after auto-setup
+                    from .blocklist import load_blocklist
+                    if load_blocklist():
+                        logging.info("✅ Blocklist loaded after auto-setup")
+                    else:
+                        logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
+                    
+                    print("✅ Auto-configuration complete! Starting sync service...\n")
+                    
+                except Exception as e:
+                    logging.error(f"Auto-migration failed: {e}, falling back to web UI setup")
+                    print(f"❌ Auto-configuration failed: {e}")
+                    print("   Please complete the setup wizard at the web interface.\n")
+                    # Fall through to manual setup wait
             
-            # Reload config and check again silently
-            config_manager.reload()
-            
-            # If still not complete after 5 seconds, show waiting message
+            # If no env config or auto-migration failed, wait for manual setup
             if not config_manager.is_setup_complete():
-                logging.info("Setup not complete. Waiting for configuration...")
-                print("\n⏳ ListSync is waiting for initial configuration.")
-                print("   Please complete the setup wizard at the web interface.")
-                print("   Checking every 30 seconds...\n")
+                # Wait 5 seconds silently to allow migration/initialization to complete
+                logging.debug("Setup not complete, waiting 5 seconds for initialization...")
+                time.sleep(5)
                 
-                # Wait loop - check every 30 seconds for setup completion
-                while not config_manager.is_setup_complete():
-                    time.sleep(30)
-                    config_manager.reload()  # Reload config from database
+                # Reload config and check again silently
+                config_manager.reload()
                 
-                logging.info("Setup completed! Starting sync service...")
-                print("✅ Configuration detected! Starting sync service...\n")
-                
-                # CRITICAL: Reload blocklist after setup completes
-                # The initial load in startup() happens before setup wizard,
-                # so we must reload here to ensure blocklist is active
-                try:
-                    from .blocklist import load_blocklist
-                    if load_blocklist():
-                        logging.info("✅ Blocklist reloaded after setup completion")
-                    else:
-                        logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
-                except Exception as e:
-                    logging.warning(f"Failed to reload blocklist after setup: {e}")
-            else:
-                # Setup completed during the 5 second wait
-                logging.info("Setup completed during initialization wait! Starting sync service...")
-                print("✅ Configuration detected! Starting sync service...\n")
-                
-                # CRITICAL: Reload blocklist after setup completes
-                try:
-                    from .blocklist import load_blocklist
-                    if load_blocklist():
-                        logging.info("✅ Blocklist reloaded after setup completion")
-                    else:
-                        logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
-                except Exception as e:
-                    logging.warning(f"Failed to reload blocklist after setup: {e}")
+                # If still not complete after 5 seconds, show waiting message
+                if not config_manager.is_setup_complete():
+                    logging.info("Setup not complete. Waiting for configuration...")
+                    print("\n⏳ ListSync is waiting for initial configuration.")
+                    print("   Please complete the setup wizard at the web interface.")
+                    print("   Checking every 30 seconds...\n")
+                    
+                    # Wait loop - check every 30 seconds for setup completion
+                    while not config_manager.is_setup_complete():
+                        time.sleep(30)
+                        config_manager.reload()  # Reload config from database
+                    
+                    logging.info("Setup completed! Starting sync service...")
+                    print("✅ Configuration detected! Starting sync service...\n")
+                    
+                    # CRITICAL: Reload blocklist after setup completes
+                    # The initial load in startup() happens before setup wizard,
+                    # so we must reload here to ensure blocklist is active
+                    try:
+                        from .blocklist import load_blocklist
+                        if load_blocklist():
+                            logging.info("✅ Blocklist reloaded after setup completion")
+                        else:
+                            logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
+                    except Exception as e:
+                        logging.warning(f"Failed to reload blocklist after setup: {e}")
+                else:
+                    # Setup completed during the 5 second wait
+                    logging.info("Setup completed during initialization wait! Starting sync service...")
+                    print("✅ Configuration detected! Starting sync service...\n")
+                    
+                    # CRITICAL: Reload blocklist after setup completes
+                    try:
+                        from .blocklist import load_blocklist
+                        if load_blocklist():
+                            logging.info("✅ Blocklist reloaded after setup completion")
+                        else:
+                            logging.warning("⚠️ Blocklist file not found, continuing without blocklist")
+                    except Exception as e:
+                        logging.warning(f"Failed to reload blocklist after setup: {e}")
         
         # Initialize sync interval (environment -> database if needed)
         sync_interval = initialize_sync_interval()
