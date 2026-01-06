@@ -357,23 +357,34 @@ def send_sync_report(sync_results, synced_lists):
         sync_results: SyncResults object
         synced_lists: List of synced list info
     """
+    logger.info("send_sync_report() called")
+    
     # Check if email reports are enabled
     enabled = os.getenv('EMAIL_REPORT_ENABLED', 'false').lower() == 'true'
+    logger.info(f"EMAIL_REPORT_ENABLED: {enabled}")
+    
     if not enabled:
-        logger.debug("Email reports disabled (EMAIL_REPORT_ENABLED=false)")
+        logger.info("Email reports disabled (EMAIL_REPORT_ENABLED=false)")
         return
     
     try:
+        logger.info("Generating HTML report...")
         # Generate HTML
         html = generate_html_report(sync_results, synced_lists)
+        logger.info(f"HTML generated: {len(html)} bytes")
         
         # Send email
         subject = f"List-Sync Report - {datetime.now().strftime('%Y-%m-%d')}"
+        logger.info(f"Sending email: {subject}")
+        
+        from .email_sender import send_email
         result = send_email(subject, html, html=True)
         
         if result:
-            logger.info(f"Sync report sent: {result}")
+            logger.info(f"✅ Sync report sent/saved: {result}")
+        else:
+            logger.warning("Email report returned None (MAIL_TO not configured?)")
         
     except Exception as e:
-        logger.error(f"Failed to generate/send sync report: {e}")
+        logger.error(f"Failed to generate/send sync report: {e}", exc_info=True)
 
