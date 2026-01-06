@@ -1462,6 +1462,14 @@ def run_sync(
         if not dry_run:
             send_to_discord_webhook(summary_text, sync_results, automated=automated_mode)
         
+        # Send email report if configured
+        if not dry_run:
+            try:
+                from .reports.report_generator import send_sync_report
+                send_sync_report(sync_results, synced_lists)
+            except Exception as e:
+                logging.warning(f"Failed to send email report: {e}")
+        
         # Log sync complete with clear marker
         sync_end_marker = f"========== SYNC COMPLETE [FULL] - Session: {session_id} - Status: SUCCESS =========="
         logging.info(sync_end_marker)
