@@ -4,6 +4,7 @@ Generates HTML email reports with per-list breakdown
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
