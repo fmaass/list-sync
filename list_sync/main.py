@@ -1721,12 +1721,15 @@ def main():
         startup()
         added_logger = setup_logging()
         
+        # Check for explicit skip setup flag (for Docker/production deployments)
+        skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
+        
         # Check if setup is complete before proceeding
         from .config import ConfigManager
         config_manager = ConfigManager()
         
-        # First, do a silent check (no messages)
-        if not config_manager.is_setup_complete():
+        # First, do a silent check (no messages) - unless SKIP_SETUP is set
+        if not skip_setup and not config_manager.is_setup_complete():
             # Check if we have complete env var configuration
             # If so, auto-migrate and skip web UI setup entirely
             if config_manager.has_env_config():
@@ -1818,11 +1821,14 @@ def main():
         display_ascii_art()
         display_banner()
         
+        # Check for explicit skip setup flag (for Docker deployments)
+        skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
+        
         # Check for Docker environment variables
         url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
         
-        # If in automated mode, bypass menu and start syncing
-        if url and api_key and automated_mode:
+        # If in automated mode OR skip setup flag is set, bypass menu and start syncing
+        if (url and api_key and automated_mode) or skip_setup:
             logging.info("Starting in automated mode")
             overseerr_client = OverseerrClient(url, api_key, user_id)
             try:
