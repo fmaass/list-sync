@@ -619,12 +619,13 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         newcomers = get_newcomers(days=7)
         removals = get_removals(days=7)
         
-        if newcomers or removals:
-            html += """
+        # Always show the section, even if empty (so user knows tracking is working)
+        html += """
         <div class="list-section">
             <h2>📈 List Changes (Last 7 Days)</h2>
 """
-            
+        
+        if newcomers or removals:
             # Newcomers section
             if newcomers:
                 html += f"""
@@ -694,12 +695,27 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                 </ul>
             </div>
 """
-            
+        else:
+            # Show message when no changes
             html += """
+            <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
+                <p style="margin: 0;">No list changes in the last 7 days. Changes will appear here after the next sync completes.</p>
+            </div>
+"""
+        
+        html += """
         </div>
 """
     except Exception as e:
         logger.warning(f"Failed to load newcomers/removals: {e}")
+        html += """
+        <div class="list-section">
+            <h2>📈 List Changes (Last 7 Days)</h2>
+            <div style="background: #3a1a1a; padding: 20px; border-radius: 8px; text-align: center;">
+                <p style="margin: 0; color: #f87171;">⚠️ Unable to load list changes data</p>
+            </div>
+        </div>
+"""
     
     html += """
         
