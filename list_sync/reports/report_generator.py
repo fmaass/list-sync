@@ -301,11 +301,11 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     
     # Calculate totals
     total_items = sync_results.total_items
-    in_library = sync_results.results['already_available'] + sync_results.results['skipped']
-    pending = sync_results.results['already_requested'] + sync_results.results['requested']
-    blocked = sync_results.results['blocked']
-    not_found = sync_results.results['not_found']
-    errors = sync_results.results['error']
+    in_library = sync_results.results.get('already_available', 0) + sync_results.results.get('skipped', 0)
+    pending = sync_results.results.get('already_requested', 0) + sync_results.results.get('requested', 0)
+    blocked = sync_results.results.get('blocked', 0)
+    not_found = sync_results.results.get('not_found', 0)
+    errors = sync_results.results.get('error', 0) + sync_results.results.get('request_failed', 0)
     
     in_library_pct = (in_library / total_items * 100) if total_items > 0 else 0
     pending_pct = (pending / total_items * 100) if total_items > 0 else 0
