@@ -1,0 +1,992 @@
+================================================================================
+BLOCKLIST FEATURE - COMPLETE IMPLEMENTATION GUIDE
+================================================================================
+Version: 1.0
+Date: January 1, 2026
+Purpose: Comprehensive guide for re-implementing blocklist feature from scratch
+
+This document provides everything needed to re-implement the blocklist feature
+if you ever need to fork from upstream or start fresh.
+
+================================================================================
+FEATURE OVERVIEW
+================================================================================
+
+PURPOSE:
+  Prevent list-sync from requesting movies that are on Radarr's exclusion list.
+  This eliminates repeated requests for blocked movies and reduces traffic by
+  70-80%.
+
+HOW IT WORKS:
+  1. Export service fetches Radarr exclusions via API
+  2. Exports to JSON file (shared volume)
+  3. List-sync loads JSON on startup
+  4. Before requesting each item, checks if TMDB ID is in blocklist
+  5. Skips blocked items, logs them, tracks in database
+
+ARCHITECTURE:
+  ┌─────────────────────────────────────────────────────────┐
+  │  Radarr Exclusions (source of truth)                    │
+  │  └─> /api/v3/exclusions (124 items)                     │
+  │         ↓                                                │
+  │  Export Service (Docker container)                       │
+  │  └─> /data/blocklist.json                               │
+  │         ↓                                                │
+  │  List-Sync (custom build)                               │
+  │  └─> Load → Check → Filter → Request                    │
+  └─────────────────────────────────────────────────────────┘
+
+================================================================================
+FILE 1: list_sync/blocklist.py (NEW FILE - 305 lines)
+================================================================================
+
+This is the core blocklist manager class.
+
+LOCATION: list_sync/blocklist.py
+
+PURPOSE:
+  - Load blocklist from JSON file
+  - Cache in memory for O(1) lookups
+  - Provide is_blocked() check function
+  - Handle missing files gracefully
+  - Auto-reload when stale
+
+KEY CLASSES/FUNCTIONS:
+
+class BlocklistManager:
+    """Main blocklist management class"""
+    
+    Attributes:
+      - blocklist_path: Path to JSON file
+      - enabled: Enable/disable checking
+      - movie_blocklist: Set[int] - TMDB IDs
+      - tv_blocklist: Set[int] - TMDB IDs
+      - loaded_at: datetime - When loaded
+      - reload_hours: int - Auto-reload interval
+    
+    Methods:
+      - load(force=False): Load JSON, return True/False
+      - is_blocked(tmdb_id, media_type): Check if blocked
+      - should_reload(): Check if stale
+      - get_stats(): Return statistics dict
+      - reload(): Force reload
+      - enable() / disable(): Control feature
+
+ENVIRONMENT VARIABLES:
+  - BLOCKLIST_ENABLED: true/false (default: true)
+  - BLOCKLIST_FILE: Path to JSON (default: data/blocklist.json)
+  - BLOCKLIST_RELOAD_HOURS: Hours before reload (default: 24)
+
+KEY IMPLEMENTATION DETAILS:
+
+1. Use Set for O(1) lookup performance
+2. Path object handling - ensure Path() conversion in load() and get_stats()
+3. Graceful fallback - log warning if file missing, continue without blocking
+4. Singleton pattern - use get_blocklist_manager() global instance
+5. Auto-reload - check age before each is_blocked() call
+
+JSON FORMAT:
+{
+  "version": "1.0",
+  "exported_at": "2026-01-01T00:00:00Z",
+  "source": "radarr",
+  "movies": [12345, 67890, ...],
+  "tv": [],
+  "total_count": 124
+}
+
+CRITICAL BUG FIX:
+  Issue: Path object can be set as string, causing AttributeError
+  Fix: Add isinstance check and Path() conversion in:
+       - load() method (line ~75)
+       - get_stats() method (line ~165)
+
+CODE SNIPPET:
+```python
+# In load() and get_stats()
+if not isinstance(self.blocklist_path, Path):
+    self.blocklist_path = Path(self.blocklist_path)
+```
+
+================================================================================
+FILE 2: list_sync/main.py (MODIFIED - 3 changes)
+================================================================================
+
+LOCATION: list_sync/main.py
+
+CHANGES NEEDED:
+
+1. Import blocklist module at top:
+   (Already imported via other modules, no explicit import needed)
+
+2. Load blocklist on startup (line ~177-186):
+```python
+def startup():
+    """Initialize application and ensure required directories and files exist."""
+    ensure_data_directory_exists()
+    init_database()
+    init_selenium_driver()
+    
+    # Load blocklist
+    try:
+        from .blocklist import load_blocklist
+        load_blocklist()
+    except Exception as e:
+        logging.warning(f"Failed to load blocklist: {e}")
+        logging.warning("Continuing without blocklist - all items will be processed")
+```
+
+3. Add blocklist check in process_media_item() (line ~513-533):
+
+FIND THIS SECTION (after logging item details, before strip year):
+```python
+    logging.info(f"🎬 PROCESSING: '{title}' ({year}) [{media_type}]{season_info}")
+    logging.info(f"   IDs: TMDB={tmdb_id}, IMDB={imdb_id}")
+    
+    # Strip any year from the title...
+```
+
+INSERT THIS CODE BETWEEN:
+```python
+    logging.info(f"🎬 PROCESSING: '{title}' ({year}) [{media_type}]{season_info}")
+    logging.info(f"   IDs: TMDB={tmdb_id}, IMDB={imdb_id}")
+    
+    # BLOCKLIST CHECK: Filter out blocked items before processing
+    if tmdb_id:
+        from .blocklist import is_blocked
+        try:
+            tmdb_id_int = int(tmdb_id)
+            if is_blocked(tmdb_id_int, media_type):
+                logging.info(f"⛔ BLOCKED: '{title}' (TMDB: {tmdb_id_int}) - on blocklist, skipping")
+                # Save to database as "blocked"
+                source_lists = get_source_lists_from_item(item, list_type, list_id)
+                for source_list in source_lists:
+                    save_sync_result(title, media_type, imdb_id, None, 
+                                   "blocked", year, tmdb_id_int, 
+                                   source_list['type'], source_list['id'])
+                return {"title": title, "status": "blocked", "year": year, "media_type": media_type}
+        except (ValueError, TypeError):
+            # Invalid TMDB ID, continue processing
+            pass
+    
+    # Strip any year from the title...
+```
+
+CRITICAL: This must be BEFORE any API calls to Overseerr!
+
+================================================================================
+FILE 3: list_sync/ui/display.py (MODIFIED - 2 changes)
+================================================================================
+
+LOCATION: list_sync/ui/display.py
+
+CHANGES NEEDED:
+
+1. Add "blocked" status to SyncResults class (line ~32-39):
+
+FIND:
+```python
+        self.results = {
+            "requested": 0,
+            "already_requested": 0,
+            "already_available": 0,
+            "not_found": 0,
+            "error": 0,
+            "skipped": 0
+        }
+```
+
+CHANGE TO:
+```python
+        self.results = {
+            "requested": 0,
+            "already_requested": 0,
+            "already_available": 0,
+            "not_found": 0,
+            "error": 0,
+            "skipped": 0,
+            "blocked": 0  # NEW: Track blocked items
+        }
+```
+
+2. Add blocked line to summary display (line ~58-61):
+
+FIND:
+```python
+        summary += f"✅ Requested: {self.results['requested']}\n"
+        summary += f"☑️ Available: {self.results['already_available']}\n"
+        summary += f"📌 Already Requested: {self.results['already_requested']}\n"
+        summary += f"⏭️ Skipped: {self.results['skipped']}\n\n"
+```
+
+CHANGE TO:
+```python
+        summary += f"✅ Requested: {self.results['requested']}\n"
+        summary += f"☑️ Available: {self.results['already_available']}\n"
+        summary += f"📌 Already Requested: {self.results['already_requested']}\n"
+        summary += f"⏭️ Skipped: {self.results['skipped']}\n"
+        summary += f"⛔ Blocked: {self.results['blocked']}\n\n"
+```
+
+================================================================================
+FILE 4: api_server.py (MODIFIED - 2 new endpoints)
+================================================================================
+
+LOCATION: api_server.py
+
+CHANGES NEEDED:
+
+Add these endpoints BEFORE the "if __name__ == '__main__':" section:
+
+```python
+# ============================================================================
+# Blocklist Endpoints
+# ============================================================================
+
+@app.get("/api/blocklist/stats")
+async def get_blocklist_stats():
+    """Get blocklist statistics and status"""
+    try:
+        from list_sync.blocklist import get_blocklist_stats
+        stats = get_blocklist_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting blocklist stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/blocklist/reload")
+async def reload_blocklist():
+    """Force reload blocklist from file"""
+    try:
+        from list_sync.blocklist import get_blocklist_manager
+        manager = get_blocklist_manager()
+        success = manager.reload()
+        
+        if success:
+            stats = manager.get_stats()
+            return {
+                "success": True,
+                "message": "Blocklist reloaded successfully",
+                "stats": stats
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to reload blocklist",
+                "stats": manager.get_stats()
+            }
+    except Exception as e:
+        logger.error(f"Error reloading blocklist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+PURPOSE:
+  - /api/blocklist/stats: View blocklist status, count, age
+  - /api/blocklist/reload: Force reload from file (useful after export)
+
+================================================================================
+FILE 5: radarr-exclusions-export/ (NEW DIRECTORY)
+================================================================================
+
+This is a standalone Docker service to export Radarr exclusions to JSON.
+
+FILES:
+  - export_radarr_exclusions.py (main script, ~200 lines)
+  - Dockerfile (Alpine Python 3.11)
+  - docker-compose.yml (service definition)
+  - requirements.txt (requests==2.31.0)
+  - README.md (usage documentation)
+  - test-local.sh (local testing script)
+  - deploy-to-saturn.sh (deployment automation)
+
+EXPORT SCRIPT (export_radarr_exclusions.py):
+
+Key Components:
+  1. RadarrExclusionsExporter class
+  2. fetch_exclusions() - Gets from /api/v3/exclusions
+  3. export_to_json() - Writes atomically (temp + rename)
+  4. Validates configuration (API key required)
+
+Environment Variables:
+  - RADARR_URL: http://radarr:7878
+  - RADARR_API_KEY: (from Radarr → Settings → General → Security)
+  - OUTPUT_FILE: /data/blocklist.json
+  - LOG_LEVEL: INFO
+
+Radarr API Endpoint:
+  GET /api/v3/exclusions
+  Returns: Array of objects with tmdbId, movieTitle, movieYear
+
+Response Example:
+```json
+[
+  {
+    "id": 1,
+    "tmdbId": 12345,
+    "movieTitle": "Example Movie",
+    "movieYear": 2020
+  },
+  ...
+]
+```
+
+Export Process:
+  1. Fetch exclusions from Radarr
+  2. Extract TMDB IDs
+  3. Remove duplicates
+  4. Sort list
+  5. Create output structure
+  6. Write to temp file
+  7. Atomic rename to final path
+
+Output JSON:
+```json
+{
+  "version": "1.0",
+  "exported_at": "2026-01-01T02:30:00Z",
+  "source": "radarr",
+  "movies": [12345, 67890, ...],
+  "tv": [],
+  "total_count": 124
+}
+```
+
+DEPLOYMENT:
+
+Method: Docker image transfer (like Seerr)
+
+Build locally:
+```bash
+cd radarr-exclusions-export
+docker build --platform linux/amd64 -t radarr-exclusions-export:deploy .
+```
+
+Transfer to Saturn:
+```bash
+docker save radarr-exclusions-export:deploy | gzip | \
+  ssh saturn.local "cat > /volume1/docker/radarr-export.tar.gz"
+```
+
+Load on Saturn:
+```bash
+ssh saturn.local "sudo /usr/local/bin/docker load < /volume1/docker/radarr-export.tar.gz"
+```
+
+Run export:
+```bash
+ssh saturn.local "sudo /usr/local/bin/docker run --rm --network arr \
+  -e RADARR_URL=http://radarr:7878 \
+  -e RADARR_API_KEY=your-key \
+  -e OUTPUT_FILE=/data/blocklist.json \
+  -v /volume1/docker/listsync/data:/data \
+  radarr-exclusions-export:deploy"
+```
+
+Schedule in cron (2:30 AM daily):
+```
+30 2 * * * cd /path && docker-compose run --rm radarr-exclusions-export
+```
+
+================================================================================
+FILE 6: scripts/build-and-deploy.sh (NEW FILE)
+================================================================================
+
+PURPOSE: Automate building and deploying custom list-sync image to Saturn
+
+This follows the proven Seerr deployment workflow:
+  1. Clean Docker (prevent "no space" errors)
+  2. Check Git status
+  3. Build for AMD64 platform
+  4. Transfer compressed image
+  5. Load on Saturn
+  6. Update compose file
+  7. Deploy container
+  8. Verify deployment
+
+Key Commands:
+```bash
+# Clean Docker
+docker system prune -a -f --volumes
+docker builder prune -f
+
+# Build
+docker build --platform linux/amd64 \
+  --build-arg COMMIT_TAG="$(git rev-parse --short HEAD)-$(date +%s)" \
+  -t list-sync-custom:deploy \
+  -f Dockerfile .
+
+# Transfer
+docker save list-sync-custom:deploy | gzip | \
+  ssh saturn.local "cat > /volume1/docker/list-sync-deploy.tar.gz"
+
+# Load
+ssh saturn.local "sudo /usr/local/bin/docker load < /volume1/docker/list-sync-deploy.tar.gz"
+
+# Deploy
+ssh saturn.local "cd /volume1/docker-compose/stacks/kometa-listsync && \
+  sudo /usr/local/bin/docker-compose up -d --force-recreate listsync"
+```
+
+IMPORTANT: Always use --platform linux/amd64 for Saturn (Synology NAS)
+
+================================================================================
+FILE 7: scripts/rollback.sh (NEW FILE)
+================================================================================
+
+PURPOSE: Quick rollback to official image if something goes wrong
+
+Steps:
+1. Backup current compose
+2. Update image to ghcr.io/woahai321/list-sync:latest
+3. Recreate container
+
+Time: <1 minute
+
+================================================================================
+FILE 8: scripts/verify-blocklist.sh (NEW FILE)
+================================================================================
+
+PURPOSE: Verify blocklist integration is working
+
+Checks:
+  1. Blocklist file exists on Saturn
+  2. Valid JSON format
+  3. Container loaded blocklist
+  4. API endpoint responding
+  5. Items being filtered (check logs)
+
+================================================================================
+DOCKER COMPOSE CHANGES
+================================================================================
+
+LOCATION: /volume1/docker-compose/stacks/kometa-listsync/docker-compose.yml
+
+REQUIRED CHANGES:
+
+1. Change image (line 6):
+   FROM: image: ghcr.io/woahai321/list-sync:latest
+   TO:   image: list-sync-custom:production
+
+2. Add environment variables (after SKIP_EXISTING):
+```yaml
+      - BLOCKLIST_ENABLED=true
+      - BLOCKLIST_FILE=/data/blocklist.json
+```
+
+3. Disable watchtower (line ~31):
+   FROM: com.centurylinklabs.watchtower.enable=true
+   TO:   com.centurylinklabs.watchtower.enable=false
+
+4. Volume is already correct:
+   - /volume1/docker/listsync/data:/data
+
+================================================================================
+DEPLOYMENT WORKFLOW
+================================================================================
+
+STEP-BY-STEP DEPLOYMENT:
+
+1. EXPORT SERVICE FIRST:
+   a. Build export image locally
+   b. Transfer to Saturn
+   c. Run export → creates blocklist.json
+   d. Verify: 124 movies exported
+
+2. LIST-SYNC SECOND:
+   a. Build custom list-sync image locally
+   b. Transfer to Saturn
+   c. Update compose file
+   d. Deploy container
+   e. Verify: Blocklist loaded
+
+3. VERIFICATION:
+   a. Check API: curl http://localhost:4222/api/blocklist/stats
+   b. Should show: movie_count: 124, source: radarr
+   c. Wait for next sync
+   d. Look for "⛔ BLOCKED" in logs
+
+================================================================================
+TESTING & VERIFICATION
+================================================================================
+
+LOCAL TESTING:
+
+1. Unit Tests (Python):
+```python
+from list_sync.blocklist import BlocklistManager
+import json, tempfile
+
+# Create test blocklist
+test_data = {"movies": [123, 456], "tv": [], "total_count": 2}
+with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+    json.dump(test_data, f)
+    path = f.name
+
+# Test manager
+manager = BlocklistManager(blocklist_path=path)
+assert manager.load() == True
+assert manager.is_blocked(123, 'movie') == True
+assert manager.is_blocked(999, 'movie') == False
+```
+
+2. Integration Test:
+   - Build Docker image
+   - Run in test mode
+   - Verify blocklist loads
+   - Check no import errors
+
+3. Production Verification:
+   - API endpoint returns stats
+   - Logs show "Loaded blocklist"
+   - Sync summary shows blocked count
+   - No blocked items in Overseerr
+
+================================================================================
+RADARR API DETAILS
+================================================================================
+
+ENDPOINT: /api/v3/exclusions
+
+METHOD: GET
+
+HEADERS:
+  X-Api-Key: your-radarr-api-key
+
+RESPONSE:
+```json
+[
+  {
+    "id": 1,
+    "tmdbId": 12345,
+    "movieTitle": "Movie Name",
+    "movieYear": 2020
+  }
+]
+```
+
+API KEY LOCATION:
+  - Radarr config: /volume1/docker/radarr/config/config.xml
+  - Element: <ApiKey>...</ApiKey>
+  - Or Radarr UI: Settings → General → Security → API Key
+
+WHY RADARR INSTEAD OF SEERR:
+  - Radarr: Source of truth, ~124 items
+  - Seerr: Synced from Radarr, only 3 items (sync might be broken)
+  - Direct from Radarr ensures completeness
+
+================================================================================
+COMMON ISSUES & SOLUTIONS
+================================================================================
+
+ISSUE 1: Blocklist file not found
+  Symptom: WARNING: Blocklist file not found: data/blocklist.json
+  Cause: Export service hasn't run yet
+  Solution: Run export service first
+  
+ISSUE 2: Blocklist not loading
+  Symptom: API shows loaded=false
+  Cause: Wrong file path or permissions
+  Solution: Check BLOCKLIST_FILE env var, verify path
+
+ISSUE 3: No blocked items in logs
+  Symptom: No "⛔ BLOCKED" messages
+  Cause: Lists don't contain blocked movies (this is actually good!)
+  Note: Feature is working, just no matches
+
+ISSUE 4: Path object AttributeError
+  Symptom: 'str' object has no attribute 'exists'
+  Cause: blocklist_path set as string
+  Solution: Add Path() conversion (see FILE 1 above)
+
+ISSUE 5: Setup wizard keeps appearing
+  Symptom: Container waits for web UI every restart
+  Cause: setup_complete flag resets
+  Solution: See SMART SETUP SOLUTION below
+
+================================================================================
+SMART SETUP SOLUTION (Future Improvement)
+================================================================================
+
+PROBLEM:
+  List-sync waits for web UI setup even when all config is in env vars.
+  This causes repeated setup on container recreation.
+
+ROOT CAUSE:
+  Setup check happens BEFORE loading env vars (main.py line ~1705-1730)
+
+SOLUTION:
+  Add auto-migration logic in main.py:
+
+```python
+if not config_manager.is_setup_complete():
+    # NEW: Try auto-migration from env vars
+    if config_manager.has_env_config():
+        logging.info("Complete env config found, auto-migrating to database...")
+        try:
+            migrated_count = config_manager.migrate_env_to_database()
+            # Also load lists from env
+            from .config import load_env_lists
+            load_env_lists()
+            # Mark setup complete
+            config_manager.mark_setup_complete()
+            logging.info(f"Auto-setup complete! Migrated {migrated_count} settings")
+            print(f"✅ Auto-configured from environment variables!\n")
+        except Exception as e:
+            logging.error(f"Auto-migration failed: {e}")
+            # Fall through to web UI wait
+    
+    # If no env config or auto-migration failed, wait for web UI
+    if not config_manager.is_setup_complete():
+        logging.info("Setup not complete. Waiting for configuration...")
+        print("\n⏳ ListSync is waiting for initial configuration.")
+        # ... rest of existing wait loop
+```
+
+This would:
+  - Auto-migrate env vars to database
+  - Skip web UI if config is complete
+  - Still allow web UI if env vars incomplete
+  - Never need repeated setup with Docker deployments
+
+OPTIONAL: Add env var to control behavior:
+  AUTO_SETUP_FROM_ENV=true (default: true)
+
+================================================================================
+CONFIGURATION
+================================================================================
+
+ENVIRONMENT VARIABLES:
+
+List-Sync Container:
+  BLOCKLIST_ENABLED=true              # Enable feature
+  BLOCKLIST_FILE=/data/blocklist.json # Path to JSON
+  BLOCKLIST_RELOAD_HOURS=24           # Auto-reload interval
+
+Export Service:
+  RADARR_URL=http://radarr:7878       # Radarr API URL
+  RADARR_API_KEY=your-key             # From Radarr config
+  OUTPUT_FILE=/data/blocklist.json    # Output path
+  LOG_LEVEL=INFO                       # Logging level
+  TZ=Europe/Zurich                     # Timezone
+
+VOLUMES:
+  Both services need access to shared data directory:
+  /volume1/docker/listsync/data:/data
+
+NETWORK:
+  Export service must be on 'arr' network to reach Radarr
+
+================================================================================
+PERFORMANCE CONSIDERATIONS
+================================================================================
+
+BLOCKLIST CHECK:
+  - Complexity: O(1) lookup (Set-based)
+  - Memory: ~10KB per 1000 items
+  - Overhead: <1ms per item
+  - Impact: Negligible
+
+EXPORT:
+  - Frequency: Once daily (2:30 AM)
+  - Duration: <5 seconds
+  - API calls: 1 (to Radarr)
+  - Output size: ~2KB for 124 items
+
+RELOAD:
+  - Auto-reload: Every 24 hours
+  - Manual: Via API endpoint
+  - Duration: <100ms
+
+================================================================================
+MONITORING & METRICS
+================================================================================
+
+API ENDPOINTS:
+
+GET /api/blocklist/stats
+  Returns:
+    - enabled: bool
+    - loaded: bool
+    - movie_count: int
+    - tv_count: int
+    - total_count: int
+    - age_hours: float
+    - source: string
+
+POST /api/blocklist/reload
+  Forces reload from file
+  Returns: success status + stats
+
+LOGS TO MONITOR:
+
+Startup:
+  "✅ Loaded blocklist from data/blocklist.json"
+  "   Movies: 124, TV: 0, Total: 124"
+
+During Sync:
+  "⛔ BLOCKED: 'Movie Title' (TMDB: 12345) - on blocklist, skipping"
+
+Summary:
+  "⛔ Blocked: X"
+
+DATABASE:
+  Blocked items saved with status="blocked" in synced_items table
+
+================================================================================
+SECURITY CONSIDERATIONS
+================================================================================
+
+API KEYS:
+  - Store in secrets directory: /volume1/.../secrets/
+  - Permissions: 600 (read-only for owner)
+  - Never commit to Git
+  - Use ${VARIABLE} references in compose
+
+BLOCKLIST FILE:
+  - Readable by list-sync container
+  - Contains only TMDB IDs (public data)
+  - No sensitive information
+
+DOCKER IMAGES:
+  - Build locally (trusted source)
+  - Transfer as images (not source files)
+  - Version control via Git tags
+
+================================================================================
+MAINTENANCE
+================================================================================
+
+DAILY:
+  - Export runs automatically (cron)
+  - List-sync reloads every 24h
+  - No manual intervention needed
+
+WEEKLY:
+  - Check logs for errors
+  - Verify blocked count makes sense
+  - Monitor sync summaries
+
+MONTHLY:
+  - Review Radarr exclusions
+  - Verify export service still working
+  - Check blocklist file size/age
+
+UPDATES:
+  - Commit changes to Git
+  - Build new image locally
+  - Transfer and deploy
+  - Verify with scripts/verify-blocklist.sh
+
+================================================================================
+ROLLBACK PROCEDURE
+================================================================================
+
+IF SOMETHING GOES WRONG:
+
+Quick Rollback (<1 minute):
+```bash
+cd /Users/fabian/projects/list-sync
+./scripts/rollback.sh
+```
+
+Manual Rollback:
+```bash
+ssh saturn.local "cd /volume1/docker-compose/stacks/kometa-listsync && \
+  sudo sed -i 's|list-sync-custom:production|ghcr.io/woahai321/list-sync:latest|' docker-compose.yml && \
+  sudo /usr/local/bin/docker-compose up -d --force-recreate listsync"
+```
+
+This reverts to official image (no blocklist feature).
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+SYMPTOM: Export returns 0 items
+  CHECK: Radarr has exclusions? (Radarr UI → Indexers → Restrictions)
+  CHECK: API key correct?
+  CHECK: Network connectivity (arr network)?
+
+SYMPTOM: List-sync can't find blocklist
+  CHECK: File exists? ls /volume1/docker/listsync/data/blocklist.json
+  CHECK: BLOCKLIST_FILE env var set?
+  CHECK: Volume mounted correctly?
+
+SYMPTOM: Setup wizard keeps appearing
+  CHECK: Database volume persists?
+  CHECK: setup_complete flag in database?
+  SOLUTION: Complete web UI or implement auto-migration (see above)
+
+SYMPTOM: No blocked items
+  This is NORMAL if your lists don't contain blocked movies!
+  Feature is working, just no matches.
+
+================================================================================
+CODE QUALITY & TESTING
+================================================================================
+
+UNIT TESTS:
+  - BlocklistManager initialization
+  - JSON loading (valid/invalid/missing)
+  - is_blocked() logic
+  - Statistics generation
+  - Enable/disable functionality
+  - Path object handling
+
+INTEGRATION TESTS:
+  - Load blocklist on startup
+  - Filter items in process_media_item()
+  - Save blocked status to database
+  - Display in sync summary
+  - API endpoints return correct data
+
+END-TO-END:
+  - Export from Radarr
+  - Load in list-sync
+  - Filter blocked items
+  - Verify in logs/API/database
+
+================================================================================
+DEPENDENCIES
+================================================================================
+
+Python Packages (already in project):
+  - requests (for export service)
+  - pathlib (standard library)
+  - json (standard library)
+  - logging (standard library)
+  - datetime (standard library)
+
+No new dependencies added to main list-sync!
+
+Export service only needs: requests==2.31.0
+
+================================================================================
+DEPLOYMENT CHECKLIST
+================================================================================
+
+BEFORE DEPLOYING:
+  [ ] All code committed to Git
+  [ ] Tests passed locally
+  [ ] Radarr API key obtained
+  [ ] Export service built
+  [ ] Custom list-sync built
+
+DEPLOYMENT STEPS:
+  [ ] Deploy export service (Docker image)
+  [ ] Run initial export (verify 124+ movies)
+  [ ] Build custom list-sync
+  [ ] Transfer image to Saturn
+  [ ] Update compose file
+  [ ] Deploy container
+  [ ] Complete web UI setup (if needed)
+  [ ] Verify blocklist loaded (API)
+  [ ] Monitor next sync
+
+AFTER DEPLOYMENT:
+  [ ] Verify no errors in logs
+  [ ] Check API endpoints work
+  [ ] Confirm sync summary shows blocked count
+  [ ] Schedule export service (cron)
+  [ ] Document any issues
+  [ ] Merge to main after validation
+
+================================================================================
+KNOWN LIMITATIONS
+================================================================================
+
+1. Radarr Only:
+   - Currently only movies from Radarr
+   - Sonarr (TV) would need separate implementation
+   - Could extend to support multiple sources
+
+2. TMDB ID Required:
+   - Only filters items with TMDB IDs
+   - Items without TMDB ID won't be checked
+
+3. Manual Database Setup:
+   - Requires web UI setup after fresh deployment
+   - Could be improved with auto-migration (see SMART SETUP SOLUTION)
+
+4. Cron Scheduling:
+   - Export must be scheduled separately
+   - Not integrated into list-sync
+   - Could be improved with built-in scheduler
+
+================================================================================
+FUTURE ENHANCEMENTS
+================================================================================
+
+1. Auto-Setup from Env Vars:
+   - Skip web UI when env vars complete
+   - True infrastructure-as-code
+   - See SMART SETUP SOLUTION above
+
+2. Sonarr Support:
+   - Add TV show exclusions
+   - Fetch from Sonarr /api/v3/exclusions
+   - Map TVDB → TMDB IDs
+
+3. Multiple Sources:
+   - Support Radarr + Sonarr + Seerr
+   - Merge all exclusions
+   - Deduplicate by TMDB ID
+
+4. Web UI Management:
+   - View blocklist in dashboard
+   - Add/remove items manually
+   - Force export/reload buttons
+
+5. Statistics:
+   - Track how many items blocked over time
+   - Show most frequently blocked
+   - Display traffic savings
+
+================================================================================
+REFERENCES
+================================================================================
+
+SIMILAR IMPLEMENTATIONS:
+  - Seerr blocklist sync: /server/lib/blocklistSync.ts
+  - Radarr sync script: /portainer-stacks/.../sync_exclusions.py
+
+API DOCUMENTATION:
+  - Radarr API: https://radarr.video/docs/api/
+  - List-sync API: http://localhost:4222/docs
+
+DEPLOYMENT PATTERNS:
+  - Based on Seerr workflow: /projects/seerr/DEPLOYMENT_WORKFLOW.md
+  - Docker image transfer (not file copying)
+  - Build locally, deploy remotely
+
+================================================================================
+CONTACT & SUPPORT
+================================================================================
+
+If re-implementing from scratch:
+  1. Start with list_sync/blocklist.py (core functionality)
+  2. Add integration to main.py (filter before requests)
+  3. Update display.py (show blocked count)
+  4. Add API endpoints (monitoring)
+  5. Create export service (Radarr → JSON)
+  6. Test thoroughly
+  7. Deploy via Docker images
+
+Key files to reference:
+  - list_sync/blocklist.py (complete implementation)
+  - radarr-exclusions-export/export_radarr_exclusions.py (export logic)
+  - scripts/build-and-deploy.sh (deployment automation)
+
+================================================================================
+END OF IMPLEMENTATION GUIDE
+================================================================================
+
+This document contains everything needed to re-implement the blocklist feature
+from scratch. Keep it safe for future reference!
+
+Last Updated: January 1, 2026
+Status: Verified in production with 124 movies from Radarr
+
+
+

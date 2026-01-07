@@ -45,6 +45,7 @@ services:
       - RUNNING_IN_DOCKER=true
       - NO_SANDBOX=1
       - DISPLAY=:99
+      - SKIP_SETUP=${SKIP_SETUP:-false}
     volumes:
       # Persist data directory
       - ./data:/usr/src/app/data

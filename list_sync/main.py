@@ -1909,8 +1909,17 @@ def main():
                     run_sync(overseerr_client, is_4k=is_4k, automated_mode=automated_mode)
                     sys.exit(0)
             except Exception as e:
-                logging.error(f"Error in automated mode: {str(e)}")
-                # Continue to interactive menu if automated mode fails
+                import traceback
+                logging.error(f"❌ Error in automated mode: {str(e)}")
+                logging.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                print(f"❌ Error in automated mode: {str(e)}")
+                print(f"❌ Full traceback:\n{traceback.format_exc()}")
+                # If SKIP_SETUP is set, we should NOT fall back to interactive mode
+                if skip_setup:
+                    logging.error("SKIP_SETUP=true but automated mode failed. Exiting.")
+                    print("SKIP_SETUP=true but automated mode failed. Exiting.")
+                    sys.exit(1)
+                # Continue to interactive menu if automated mode fails (only if SKIP_SETUP=false)
         
         # Get API credentials if not in automated mode
         url, api_key, user_id = get_credentials()
