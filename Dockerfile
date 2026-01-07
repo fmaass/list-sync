@@ -77,7 +77,7 @@ RUN npm run build
 # Stage 3: Final Runtime Image
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
-# Install system dependencies for Chrome, Node.js, and process management
+# Install system dependencies for Chrome, Node.js, process management, and PDF generation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Chrome dependencies
     wget \
@@ -89,6 +89,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libappindicator3-1 \
     libgbm-dev \
     libgtk-3-0 \
+    # WeasyPrint dependencies for PDF generation
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
     libx11-xcb1 \
     libxtst6 \
     xdg-utils \
