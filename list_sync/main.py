@@ -1842,11 +1842,15 @@ def main():
         
         # If SKIP_SETUP, use environment variables directly (bypass database)
         if skip_setup:
+            logging.info("SKIP_SETUP=true: Using environment variables directly")
             url = os.getenv('OVERSEERR_URL')
             api_key = os.getenv('OVERSEERR_API_KEY')
             user_id = os.getenv('OVERSEERR_USER_ID', '1')
             automated_mode = True
             is_4k = os.getenv('OVERSEERR_4K', 'false').lower() == 'true'
+            
+            if url and api_key:
+                logging.info(f"Credentials loaded from environment: URL={url}, user_id={user_id}")
         else:
             # Normal flow: Check database/environment
             url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
@@ -1858,7 +1862,9 @@ def main():
             try:
                 # Test connection to make sure credentials are valid
                 overseerr_client.test_connection()
-                # Try to load lists from environment if none exist
+                
+                # Load lists from environment (important for SKIP_SETUP mode)
+                logging.info("Loading lists from environment...")
                 load_env_lists()
                 
                 # Always use the database sync interval (which was initialized from env if needed)
