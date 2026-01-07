@@ -127,9 +127,58 @@ class BlocklistManager:
             logger.warning("Continuing without blocklist - all items will be processed")
             return False
     
+    def is_documentary(self, tmdb_id: int, media_type: str) -> bool:
+        """
+        Check if item is a documentary using TMDB API.
+        
+        Args:
+            tmdb_id: TMDB ID of the item
+            media_type: 'movie' or 'tv'
+            
+        Returns:
+            True if item is a documentary
+        """
+        # Only check if feature is enabled
+        block_docs = os.getenv('BLOCK_DOCUMENTARIES', 'false').lower() == 'true'
+        if not block_docs:
+            return False
+        
+        try:
+            import requests
+            
+            # Get TMDB API key from environment
+            tmdb_key = os.getenv('TMDB_KEY', '')
+            if not tmdb_key:
+                logger.debug("TMDB_KEY not configured, cannot check documentary genre")
+                return False
+            
+            # Query TMDB for genres
+            url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
+            params = {'api_key': tmdb_key}
+            
+            response = requests.get(url, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                genres = data.get('genres', [])
+                
+                # Documentary genre ID: 99 for movies, 99 for TV as well
+                is_doc = any(g.get('id') == 99 for g in genres)
+                
+                if is_doc:
+                    logger.info(f"🎬 Documentary detected: {data.get('title', data.get('name', 'Unknown'))} (TMDB: {tmdb_id})")
+                
+                return is_doc
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error checking documentary genre: {e}")
+            return False
+    
     def is_blocked(self, tmdb_id: int, media_type: str) -> bool:
         """
-        Check if item is blocked.
+        Check if item is blocked (Radarr blocklist + optional documentary filter).
         
         Args:
             tmdb_id: TMDB ID of the item
@@ -145,22 +194,27 @@ class BlocklistManager:
             # Try to load if not loaded yet
             self.load()
             if not self.loaded_at:
-                # Still no blocklist, allow everything
-                return False
+                # Still no blocklist, allow everything (but still check documentary filter)
+                return self.is_documentary(tmdb_id, media_type)
         
         # Auto-reload if stale
         if self.should_reload():
             logger.info("Blocklist is stale, reloading...")
             self.load(force=True)
         
-        # Check blocklist
+        # Check Radarr exclusion blocklist
         if media_type == 'movie':
-            return tmdb_id in self.movie_blocklist
+            if tmdb_id in self.movie_blocklist:
+                return True
         elif media_type == 'tv':
-            return tmdb_id in self.tv_blocklist
-        else:
-            logger.warning(f"Unknown media type '{media_type}', assuming not blocked")
-            return False
+            if tmdb_id in self.tv_blocklist:
+                return True
+        
+        # Check documentary filter (if enabled)
+        if self.is_documentary(tmdb_id, media_type):
+            return True
+        
+        return False
     
     def should_reload(self) -> bool:
         """

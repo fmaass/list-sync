@@ -22,7 +22,8 @@ from .database import (
     init_database, load_list_ids, save_list_id, delete_list,
     load_sync_interval, configure_sync_interval, should_sync_item,
     save_sync_result, update_list_item_count, update_list_sync_info, DB_FILE,
-    start_sync_in_db, end_sync_in_db, add_item_to_sync, update_sync_lists_in_db
+    start_sync_in_db, end_sync_in_db, add_item_to_sync, update_sync_lists_in_db,
+    detect_list_removals, get_newcomers, get_removals
 )
 from .notifications.discord import send_to_discord_webhook
 from .providers import get_provider, get_available_providers, SyncCancelledException
@@ -674,16 +675,29 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
             requester_user_id = choose_request_user_id(source_lists, overseerr_client.requester_user_id)
             logging.info(f"🙋 Using Overseerr user_id {requester_user_id} for '{title}'")
             
-            # Check if we should skip this item based on last sync time
-            if not should_sync_item(overseerr_id):
-                logging.info(f"⏭️  SKIP: Recently synced (within skip window)")
-                # Save relationship for all source lists
-                for source_list in source_lists:
-                    save_sync_result(title, media_type, imdb_id, overseerr_id, "skipped", year, tmdb_id, source_list['type'], source_list['id'])
-                return {"title": title, "status": "skipped", "year": year, "media_type": media_type}
-
+            # Check media status in Overseerr
             logging.info(f"🔍 Checking media status in Overseerr...")
             is_available, is_requested, number_of_seasons = overseerr_client.get_media_status(overseerr_id, search_result["mediaType"])
+            
+            # Check if we should skip re-requesting (but still update status accurately)
+            if not should_sync_item(overseerr_id):
+                logging.info(f"⏭️  Recently synced - updating status but not re-requesting")
+                
+                # Determine ACTUAL current status from Overseerr
+                if is_available:
+                    actual_status = "already_available"
+                elif is_requested:
+                    actual_status = "already_requested"
+                else:
+                    actual_status = "not_requested"
+                
+                logging.info(f"📊 Actual status from Overseerr: {actual_status}")
+                
+                # Save with REAL status (not "skipped"!)
+                for source_list in source_lists:
+                    save_sync_result(title, media_type, imdb_id, overseerr_id, actual_status, year, tmdb_id, source_list['type'], source_list['id'])
+                
+                return {"title": title, "status": actual_status, "year": year, "media_type": media_type}
             
             # Log status interpretation for debugging
             if not is_available and not is_requested:
@@ -967,6 +981,8 @@ def automated_sync(
         is_4k (bool, optional): Whether to request 4K. Defaults to False.
         automated_mode (bool, optional): Whether to run in automated mode. Defaults to True.
     """
+    logging.info(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
+    print(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
     # Current interval - will be updated from database
     current_interval_hours = initial_interval_hours
     
@@ -1000,6 +1016,8 @@ def automated_sync(
             force_full_sync (bool): If True, skip single list sync checks and perform full sync
             ignore_pause (bool): If True, ignore any pause_until timer (e.g. for manual triggers)
         """
+        logging.info(f"🔄 perform_sync() called: force_full_sync={force_full_sync}, ignore_pause={ignore_pause}")
+        print(f"🔄 perform_sync() called: force_full_sync={force_full_sync}, ignore_pause={ignore_pause}")
         # Honor pause-until if set (from prior cancellation)
         try:
             if not ignore_pause:
@@ -1286,6 +1304,8 @@ def automated_sync(
     # Perform initial sync (always force full sync on startup)
     # This ensures that on app reboot, we always sync all configured lists,
     # not just process queued single list syncs
+    logging.info("🚀 Calling perform_sync(force_full_sync=True) for initial sync")
+    print("🚀 Calling perform_sync(force_full_sync=True) for initial sync")
     perform_sync(force_full_sync=True)
     
     while True:
@@ -1418,6 +1438,19 @@ def run_sync(
         # Fetch media from lists
         media_items, synced_lists = fetch_media_from_lists(list_ids)
         
+        # Store previous state of items per list (before sync updates item_lists)
+        previous_items_per_list = {}
+        if not dry_run:
+            try:
+                from .database import get_list_items
+                for list_info in synced_lists:
+                    list_type = list_info['type']
+                    list_id = list_info['id']
+                    previous_items = get_list_items(list_type, list_id)
+                    previous_items_per_list[f"{list_type}:{list_id}"] = {item['id'] for item in previous_items}
+            except Exception as e:
+                logging.warning(f"Failed to store previous list state: {e}")
+        
         if not media_items:
             logging.warning("No media items found in configured lists")
             print("\n⚠️  No media items found in configured lists.")
@@ -1454,6 +1487,50 @@ def run_sync(
             session_id=session_id
         )
         
+        # Detect removals for each synced list
+        # Compare current items (after sync) with previous state (before sync)
+        if not dry_run:
+            try:
+                from .database import get_list_items
+                for list_info in synced_lists:
+                    list_type = list_info['type']
+                    list_id = list_info['id']
+                    key = f"{list_type}:{list_id}"
+                    # Get current items in this list (after sync, item_lists is updated)
+                    current_items = get_list_items(list_type, list_id)
+                    current_item_ids = {item['id'] for item in current_items}
+                    # Use previous state stored before sync
+                    previous_item_ids = previous_items_per_list.get(key, set())
+                    # Items that were removed = in previous but not in current
+                    removed_item_ids = previous_item_ids - current_item_ids
+                    
+                    # Record removals
+                    if removed_item_ids:
+                        import sqlite3
+                        from .database import DB_FILE
+                        with sqlite3.connect(DB_FILE) as conn:
+                            cursor = conn.cursor()
+                            for item_id in removed_item_ids:
+                                # Get item details
+                                cursor.execute('''
+                                    SELECT title, year, tmdb_id 
+                                    FROM synced_items 
+                                    WHERE id = ?
+                                ''', (item_id,))
+                                item = cursor.fetchone()
+                                
+                                if item:
+                                    title, year, tmdb_id = item
+                                    # Record the removal
+                                    cursor.execute('''
+                                        INSERT INTO list_changes (item_id, list_type, list_id, change_type, changed_at, title, year, tmdb_id)
+                                        VALUES (?, ?, ?, 'removed', CURRENT_TIMESTAMP, ?, ?, ?)
+                                    ''', (item_id, list_type, list_id, title, year, tmdb_id))
+                            
+                            conn.commit()
+            except Exception as e:
+                logging.warning(f"Failed to detect list removals: {e}")
+        
         # Display summary
         summary_text = str(sync_results)
         display_summary(sync_results)
@@ -1461,6 +1538,17 @@ def run_sync(
         # Send to Discord webhook if configured
         if not dry_run:
             send_to_discord_webhook(summary_text, sync_results, automated=automated_mode)
+        
+        # Send email report if configured
+        if not dry_run:
+            try:
+                logging.info("Attempting to generate email report...")
+                from .reports.report_generator import send_sync_report
+                logging.info("Email report module imported successfully")
+                send_sync_report(sync_results, synced_lists)
+                logging.info("Email report sent/saved successfully")
+            except Exception as e:
+                logging.error(f"Failed to send email report: {e}", exc_info=True)
         
         # Log sync complete with clear marker
         sync_end_marker = f"========== SYNC COMPLETE [FULL] - Session: {session_id} - Status: SUCCESS =========="
@@ -1697,12 +1785,33 @@ def main():
         startup()
         added_logger = setup_logging()
         
+        # Check for explicit skip setup flag (for Docker/production deployments)
+        skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
+        logging.info(f"🔍 DEBUG: SKIP_SETUP = {skip_setup}")
+        print(f"🔍 DEBUG: SKIP_SETUP = {skip_setup}")
+        
         # Check if setup is complete before proceeding
         from .config import ConfigManager
         config_manager = ConfigManager()
         
-        # First, do a silent check (no messages)
-        if not config_manager.is_setup_complete():
+        # If SKIP_SETUP is set, ensure environment config is migrated to database first
+        if skip_setup and not config_manager.is_setup_complete():
+            if config_manager.has_env_config():
+                logging.info("SKIP_SETUP=true: Auto-migrating environment configuration to database...")
+                print("\n⚡ Auto-configuring from environment variables...\n")
+                try:
+                    migrated_count = config_manager.migrate_env_to_database()
+                    from .config import load_env_lists
+                    load_env_lists()
+                    config_manager.mark_setup_complete()
+                    from .blocklist import load_blocklist
+                    load_blocklist()
+                    print("✅ Auto-configuration complete!\n")
+                except Exception as e:
+                    logging.error(f"Auto-migration failed: {e}")
+        
+        # First, do a silent check (no messages) - unless SKIP_SETUP is set
+        if not skip_setup and not config_manager.is_setup_complete():
             # Check if we have complete env var configuration
             # If so, auto-migrate and skip web UI setup entirely
             if config_manager.has_env_config():
@@ -1794,30 +1903,92 @@ def main():
         display_ascii_art()
         display_banner()
         
-        # Check for Docker environment variables
-        url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
+        # Check for explicit skip setup flag (for Docker deployments)
+        skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
         
-        # If in automated mode, bypass menu and start syncing
+        # If SKIP_SETUP, use environment variables directly (bypass database)
+        if skip_setup:
+            logging.info("🔍 SKIP_SETUP=true: Using environment variables directly")
+            print("🔍 SKIP_SETUP=true: Using environment variables directly")
+            url = os.getenv('OVERSEERR_URL')
+            api_key = os.getenv('OVERSEERR_API_KEY')
+            user_id = os.getenv('OVERSEERR_USER_ID', '1')
+            automated_mode = True
+            is_4k = os.getenv('OVERSEERR_4K', 'false').lower() == 'true'
+            
+            logging.info(f"🔍 DEBUG: url={url}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+            print(f"🔍 DEBUG: url={url}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+            
+            if url and api_key:
+                logging.info(f"✅ Credentials loaded from environment: URL={url}, user_id={user_id}")
+                print(f"✅ Credentials loaded from environment: URL={url}, user_id={user_id}")
+        else:
+            logging.info("🔍 SKIP_SETUP=false: Using normal flow")
+            # Normal flow: Check database/environment
+            url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
+        
+        # If in automated mode with valid credentials, bypass menu and start syncing
+        logging.info(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+        print(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+        
+        # Debug: Check the actual condition evaluation
+        condition_result = bool(url and api_key and automated_mode)
+        logging.info(f"🔍 DEBUG: Condition (url and api_key and automated_mode) = {condition_result}")
+        print(f"🔍 DEBUG: Condition (url and api_key and automated_mode) = {condition_result}")
+        
         if url and api_key and automated_mode:
-            logging.info("Starting in automated mode")
-            overseerr_client = OverseerrClient(url, api_key, user_id)
+            logging.info("✅ Starting in automated mode")
+            print("✅ Starting in automated mode")
+            
+            try:
+                import sys
+                sys.stdout.flush()  # Flush any buffered output
+                sys.stderr.flush()
+                logging.info(f"🔍 DEBUG: Inside try block - Creating OverseerrClient with url={url}, user_id={user_id}")
+                print(f"🔍 DEBUG: Inside try block - Creating OverseerrClient")
+                sys.stdout.flush()
+                
+                overseerr_client = OverseerrClient(url, api_key, user_id)
+                logging.info("✅ OverseerrClient created successfully")
+                print("✅ OverseerrClient created successfully")
+            except Exception as e:
+                logging.error(f"❌ Failed to create OverseerrClient: {e}")
+                print(f"❌ Failed to create OverseerrClient: {e}")
+                raise
+            
             try:
                 # Test connection to make sure credentials are valid
                 overseerr_client.test_connection()
-                # Try to load lists from environment if none exist
-                load_env_lists()
+                
+                # Load lists from environment (important for SKIP_SETUP mode)
+                logging.info("Loading lists from environment...")
+                from .config import load_env_lists as _load_env_lists
+                _load_env_lists()
                 
                 # Always use the database sync interval (which was initialized from env if needed)
+                logging.info(f"🔍 DEBUG: sync_interval = {sync_interval}")
+                print(f"🔍 DEBUG: sync_interval = {sync_interval}")
                 if sync_interval > 0:
                     logging.info(f"Starting automated sync with {sync_interval} hour interval (from database)")
+                    print(f"Starting automated sync with {sync_interval} hour interval (from database)")
                     automated_sync(overseerr_client, sync_interval, is_4k, automated_mode)
                 else:
                     logging.info("Running one-time sync in automated mode (no interval configured)")
+                    print("Running one-time sync in automated mode (no interval configured)")
                     run_sync(overseerr_client, is_4k=is_4k, automated_mode=automated_mode)
                     sys.exit(0)
             except Exception as e:
-                logging.error(f"Error in automated mode: {str(e)}")
-                # Continue to interactive menu if automated mode fails
+                import traceback
+                logging.error(f"❌ Error in automated mode: {str(e)}")
+                logging.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                print(f"❌ Error in automated mode: {str(e)}")
+                print(f"❌ Full traceback:\n{traceback.format_exc()}")
+                # If SKIP_SETUP is set, we should NOT fall back to interactive mode
+                if skip_setup:
+                    logging.error("SKIP_SETUP=true but automated mode failed. Exiting.")
+                    print("SKIP_SETUP=true but automated mode failed. Exiting.")
+                    sys.exit(1)
+                # Continue to interactive menu if automated mode fails (only if SKIP_SETUP=false)
         
         # Get API credentials if not in automated mode
         url, api_key, user_id = get_credentials()
@@ -1853,8 +2024,10 @@ def main():
         print("\n\n👋 Exiting. Goodbye!")
         sys.exit(0)
     except Exception as e:
-        logging.error(f"Unhandled exception: {str(e)}")
+        logging.error(f"Unhandled exception: {str(e)}", exc_info=True)
         print(f"\n❌ An error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

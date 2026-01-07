@@ -6,7 +6,8 @@ import logging
 import os
 
 # Define paths for data directory
-DATA_DIR = "./data"
+# Use /data in Docker (volume-mounted), ./data for local development
+DATA_DIR = os.getenv("DATA_DIR", "/data" if os.path.exists("/data") else "./data")
 
 def ensure_data_directory_exists():
     """Ensure the data directory exists for logs and configuration files."""

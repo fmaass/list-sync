@@ -36,7 +36,8 @@ def check_dependencies():
 
 def check_listsync_data():
     """Check if ListSync data directory exists"""
-    data_dir = Path("data")
+    # Check both /data (Docker volume) and ./data (local dev)
+    data_dir = Path("/data") if Path("/data").exists() else Path("data")
     db_file = data_dir / "list_sync.db"
     
     if not data_dir.exists():
@@ -44,7 +45,7 @@ def check_listsync_data():
         return False
     
     if not db_file.exists():
-        print("❌ ListSync database not found. Please run ListSync first to create the database.")
+        print(f"❌ ListSync database not found at {db_file}. Please run ListSync first to create the database.")
         return False
     
     print(f"✅ Found ListSync database: {db_file} ({db_file.stat().st_size} bytes)")

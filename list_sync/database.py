@@ -288,8 +288,33 @@ def init_database():
         try:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_item_lists_item_id ON item_lists(item_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_item_lists_list ON item_lists(list_type, list_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_item_lists_synced_at ON item_lists(synced_at)')
         except sqlite3.OperationalError:
             # Indexes might already exist
+            pass
+        
+        # Table to track list changes (additions and removals)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS list_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL,
+                list_type TEXT NOT NULL,
+                list_id TEXT NOT NULL,
+                change_type TEXT NOT NULL,  -- 'added' or 'removed'
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                title TEXT,
+                year INTEGER,
+                tmdb_id TEXT,
+                FOREIGN KEY (item_id) REFERENCES synced_items(id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Create indexes for list_changes
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_list_changes_list ON list_changes(list_type, list_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_list_changes_type ON list_changes(change_type)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_list_changes_date ON list_changes(changed_at)')
+        except sqlite3.OperationalError:
             pass
         
         # Backfill source_list columns from item_lists table for existing items
@@ -694,10 +719,32 @@ def save_sync_result(title: str, media_type: str, imdb_id: Optional[str], overse
         
         # Link item to list(s) if list information provided
         if item_db_id and list_type and list_id:
+            # Check if this is a new addition to the list
             cursor.execute('''
-                INSERT OR IGNORE INTO item_lists (item_id, list_type, list_id, synced_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                SELECT id FROM item_lists 
+                WHERE item_id = ? AND list_type = ? AND list_id = ?
             ''', (item_db_id, list_type, list_id))
+            existing_link = cursor.fetchone()
+            
+            if not existing_link:
+                # New addition - record it
+                cursor.execute('''
+                    INSERT INTO item_lists (item_id, list_type, list_id, synced_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (item_db_id, list_type, list_id))
+                
+                # Record the addition in list_changes
+                cursor.execute('''
+                    INSERT INTO list_changes (item_id, list_type, list_id, change_type, changed_at, title, year, tmdb_id)
+                    VALUES (?, ?, ?, 'added', CURRENT_TIMESTAMP, ?, ?, ?)
+                ''', (item_db_id, list_type, list_id, title, year, tmdb_id))
+            else:
+                # Update synced_at timestamp for existing link
+                cursor.execute('''
+                    UPDATE item_lists 
+                    SET synced_at = CURRENT_TIMESTAMP
+                    WHERE item_id = ? AND list_type = ? AND list_id = ?
+                ''', (item_db_id, list_type, list_id))
         
         conn.commit()
         
@@ -760,6 +807,146 @@ def get_list_items(list_type: str, list_id: str) -> List[Dict[str, Any]]:
                 'overseerr_id': row[6],
                 'status': row[7],
                 'last_synced': row[8]
+            })
+        return results
+
+
+def detect_list_removals(list_type: str, list_id: str, current_item_ids: set):
+    """
+    Detect items that were removed from a list by comparing current items with previous state.
+    
+    Args:
+        list_type: Type of list
+        list_id: ID of the list
+        current_item_ids: Set of item IDs currently in the list
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        
+        # Get all items that were previously in this list
+        cursor.execute('''
+            SELECT DISTINCT item_id 
+            FROM item_lists 
+            WHERE list_type = ? AND list_id = ?
+        ''', (list_type, list_id))
+        
+        previous_item_ids = {row[0] for row in cursor.fetchall()}
+        
+        # Find items that were removed (in previous but not in current)
+        removed_item_ids = previous_item_ids - current_item_ids
+        
+        # Record removals in list_changes
+        for item_id in removed_item_ids:
+            # Get item details
+            cursor.execute('''
+                SELECT title, year, tmdb_id 
+                FROM synced_items 
+                WHERE id = ?
+            ''', (item_id,))
+            item = cursor.fetchone()
+            
+            if item:
+                title, year, tmdb_id = item
+                # Record the removal
+                cursor.execute('''
+                    INSERT INTO list_changes (item_id, list_type, list_id, change_type, changed_at, title, year, tmdb_id)
+                    VALUES (?, ?, ?, 'removed', CURRENT_TIMESTAMP, ?, ?, ?)
+                ''', (item_id, list_type, list_id, title, year, tmdb_id))
+        
+        # Remove old item_lists entries for removed items
+        if removed_item_ids:
+            placeholders = ','.join('?' * len(removed_item_ids))
+            cursor.execute(f'''
+                DELETE FROM item_lists 
+                WHERE list_type = ? AND list_id = ? AND item_id IN ({placeholders})
+            ''', (list_type, list_id, *removed_item_ids))
+        
+        conn.commit()
+
+
+def get_newcomers(days: int = 7) -> List[Dict[str, Any]]:
+    """
+    Get items that were added to lists in the last N days.
+    
+    Args:
+        days: Number of days to look back (default: 7)
+        
+    Returns:
+        List of dictionaries with item details
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT DISTINCT
+                lc.item_id,
+                lc.title,
+                lc.year,
+                lc.tmdb_id,
+                lc.list_type,
+                lc.list_id,
+                lc.changed_at,
+                si.overseerr_id,
+                si.status
+            FROM list_changes lc
+            LEFT JOIN synced_items si ON lc.item_id = si.id
+            WHERE lc.change_type = 'added'
+            AND lc.changed_at >= datetime('now', '-' || ? || ' days')
+            ORDER BY lc.changed_at DESC
+        ''', (days,))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'item_id': row[0],
+                'title': row[1],
+                'year': row[2],
+                'tmdb_id': row[3],
+                'list_type': row[4],
+                'list_id': row[5],
+                'changed_at': row[6],
+                'overseerr_id': row[7],
+                'status': row[8]
+            })
+        return results
+
+
+def get_removals(days: int = 7) -> List[Dict[str, Any]]:
+    """
+    Get items that were removed from lists in the last N days.
+    
+    Args:
+        days: Number of days to look back (default: 7)
+        
+    Returns:
+        List of dictionaries with item details
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT DISTINCT
+                lc.item_id,
+                lc.title,
+                lc.year,
+                lc.tmdb_id,
+                lc.list_type,
+                lc.list_id,
+                lc.changed_at
+            FROM list_changes lc
+            WHERE lc.change_type = 'removed'
+            AND lc.changed_at >= datetime('now', '-' || ? || ' days')
+            ORDER BY lc.changed_at DESC
+        ''', (days,))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'item_id': row[0],
+                'title': row[1],
+                'year': row[2],
+                'tmdb_id': row[3],
+                'list_type': row[4],
+                'list_id': row[5],
+                'changed_at': row[6]
             })
         return results
 

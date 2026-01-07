@@ -328,13 +328,14 @@ def load_env_lists() -> bool:
         logging.info(f"Found {len(existing_lists)} existing lists in database")
         
         # Helper function to add list if it doesn't exist
-        def add_list_if_new(list_id: str, list_type: str):
+        def add_list_if_new(list_id: str, list_type: str, user_id: str = "1"):
             nonlocal lists_added
             if (list_type, list_id) not in existing_set:
-                save_list_id(list_id, list_type)
+                save_list_id(list_id, list_type, user_id=user_id)
                 lists_added = True
-                logging.info(f"Added new {list_type.upper()} list: {list_id}")
-                print(f"✅ Added new {list_type.upper()} list: {list_id}")
+                user_note = f" (manual approval)" if user_id != "1" else ""
+                logging.info(f"Added new {list_type.upper()} list: {list_id}{user_note}")
+                print(f"✅ Added new {list_type.upper()} list: {list_id}{user_note}")
             else:
                 logging.info(f"Skipping existing {list_type.upper()} list: {list_id}")
         
@@ -371,11 +372,18 @@ def load_env_lists() -> bool:
                 if list_id.strip():
                     add_list_if_new(list_id.strip(), "anilist")
         
-        # Process MDBList lists
+        # Process MDBList lists (auto-approve by default)
         if mdblist_lists := get_list_setting('mdblist_lists'):
             for list_id in mdblist_lists.split(','):
                 if list_id.strip():
                     add_list_if_new(list_id.strip(), "mdblist")
+        
+        # Process MDBList MANUAL approval lists (requires manual approval in Seerr)
+        manual_user_id = os.getenv('MANUAL_APPROVAL_USER_ID', '2')
+        if mdblist_manual_lists := os.getenv('MDBLIST_MANUAL_LISTS', ''):
+            for list_id in mdblist_manual_lists.split(','):
+                if list_id.strip():
+                    add_list_if_new(list_id.strip(), "mdblist", user_id=manual_user_id)
         
         # Process Steven Lu lists
         if stevenlu_lists := get_list_setting('stevenlu_lists'):
