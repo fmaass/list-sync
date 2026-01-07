@@ -1840,12 +1840,19 @@ def main():
         # Check for explicit skip setup flag (for Docker deployments)
         skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
         
-        # Check for Docker environment variables
-        url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
+        # If SKIP_SETUP, use environment variables directly (bypass database)
+        if skip_setup:
+            url = os.getenv('OVERSEERR_URL')
+            api_key = os.getenv('OVERSEERR_API_KEY')
+            user_id = os.getenv('OVERSEERR_USER_ID', '1')
+            automated_mode = True
+            is_4k = os.getenv('OVERSEERR_4K', 'false').lower() == 'true'
+        else:
+            # Normal flow: Check database/environment
+            url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
         
-        # If in automated mode OR skip setup flag is set, bypass menu and start syncing
-        # But ensure we have valid credentials first
-        if ((url and api_key and automated_mode) or skip_setup) and url and api_key:
+        # If in automated mode with valid credentials, bypass menu and start syncing
+        if url and api_key and automated_mode:
             logging.info("Starting in automated mode")
             overseerr_client = OverseerrClient(url, api_key, user_id)
             try:
