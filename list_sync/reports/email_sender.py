@@ -22,7 +22,7 @@ def _outbox_dir():
     return d
 
 
-def send_email(subject: str, body: str, html: bool = True):
+def send_email(subject: str, body: str, html: bool = True, pdf_attachment: bytes = None, pdf_filename: str = "report.pdf"):
     """
     Send email via SMTP or save to outbox
     
@@ -30,6 +30,8 @@ def send_email(subject: str, body: str, html: bool = True):
         subject: Email subject
         body: Email body (plain text or HTML)
         html: Whether body is HTML
+        pdf_attachment: Optional PDF file content as bytes
+        pdf_filename: Filename for PDF attachment
         
     Returns:
         str: "sent" if emailed, file path if saved to outbox
@@ -65,6 +67,16 @@ def send_email(subject: str, body: str, html: bool = True):
         else:
             msg.set_content(body)
         
+        # Attach PDF if provided
+        if pdf_attachment:
+            msg.add_attachment(
+                pdf_attachment,
+                maintype='application',
+                subtype='pdf',
+                filename=pdf_filename
+            )
+            logger.info(f"Attached PDF: {pdf_filename} ({len(pdf_attachment)} bytes)")
+        
         with open(fn, "wb") as f:
             f.write(bytes(msg))
         
@@ -83,6 +95,16 @@ def send_email(subject: str, body: str, html: bool = True):
             msg.add_alternative(body, subtype="html")
         else:
             msg.set_content(body)
+        
+        # Attach PDF if provided
+        if pdf_attachment:
+            msg.add_attachment(
+                pdf_attachment,
+                maintype='application',
+                subtype='pdf',
+                filename=pdf_filename
+            )
+            logger.info(f"Attached PDF: {pdf_filename} ({len(pdf_attachment)} bytes)")
         
         if starttls:
             context = ssl.create_default_context()

@@ -14,13 +14,14 @@ from ..database import get_list_items
 logger = logging.getLogger(__name__)
 
 
-def generate_html_report(sync_results, synced_lists) -> str:
+def generate_html_report(sync_results, synced_lists, max_items_per_category: int = 5) -> str:
     """
     Generate HTML email report
     
     Args:
         sync_results: SyncResults object
         synced_lists: List of synced list info
+        max_items_per_category: Maximum items to show per category (default: 5 for email, use 999 for PDF)
         
     Returns:
         str: HTML content
@@ -36,7 +37,7 @@ def generate_html_report(sync_results, synced_lists) -> str:
             # Get items for this list
             items = get_list_items(list_type, list_id)
             
-            # Calculate statistics
+            # Calculate statistics with detailed item tracking
             stats = {
                 'in_library': 0,
                 'pending': 0,
@@ -45,18 +46,54 @@ def generate_html_report(sync_results, synced_lists) -> str:
                 'errors': 0
             }
             
+            # Track detailed missing items
+            missing_items_details = {
+                'pending': [],
+                'blocked': [],
+                'not_found': [],
+                'errors': [],
+                'skipped': []
+            }
+            
             for item in items:
                 status = item.get('status', 'unknown')
+                title = item.get('title', 'Unknown')
+                year = item.get('year')
+                
                 if status in ['already_available', 'skipped']:
                     stats['in_library'] += 1
-                elif status == 'already_requested':
+                    
+                elif status in ['already_requested', 'requested']:
                     stats['pending'] += 1
+                    missing_items_details['pending'].append({
+                        'title': title,
+                        'year': year,
+                        'tmdb_id': item.get('tmdb_id'),
+                        'status': status
+                    })
+                    
                 elif status == 'blocked':
                     stats['blocked'] += 1
+                    missing_items_details['blocked'].append({
+                        'title': title,
+                        'year': year,
+                        'tmdb_id': item.get('tmdb_id')
+                    })
+                    
                 elif status == 'not_found':
                     stats['not_found'] += 1
+                    missing_items_details['not_found'].append({
+                        'title': title,
+                        'year': year
+                    })
+                    
                 elif status in ['error', 'request_failed']:
                     stats['errors'] += 1
+                    missing_items_details['errors'].append({
+                        'title': title,
+                        'year': year,
+                        'error_type': status
+                    })
             
             total = len(items)
             
@@ -96,7 +133,8 @@ def generate_html_report(sync_results, synced_lists) -> str:
                 'blocked': stats['blocked'],
                 'not_found': stats['not_found'],
                 'errors': stats['errors'],
-                'not_synced': False
+                'not_synced': False,
+                'missing_details': missing_items_details  # NEW: Full item details
             })
             
         except Exception as e:
@@ -105,13 +143,161 @@ def generate_html_report(sync_results, synced_lists) -> str:
     # Sort by coverage (worst first), but put unsynced lists at the end
     list_breakdown.sort(key=lambda x: (x.get('not_synced', False), x['coverage_pct']))
     
-    # Generate HTML
-    html = _generate_html(sync_results, list_breakdown)
+    # Generate HTML with specified max_items limit
+    html = _generate_html(sync_results, list_breakdown, max_items_per_category)
     return html
 
 
-def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
-    """Generate HTML content"""
+def generate_full_html_report(sync_results, synced_lists) -> str:
+    """
+    Generate FULL HTML report with ALL missing items (for PDF attachment).
+    Same as generate_html_report but shows ALL items, not just 5.
+    
+    Args:
+        sync_results: SyncResults object
+        synced_lists: List of synced list info
+        
+    Returns:
+        str: Complete HTML with all items
+    """
+    # Generate report with no item limit (show all items)
+    return generate_html_report(sync_results, synced_lists, max_items_per_category=999)
+
+
+def generate_pdf_report(sync_results, synced_lists) -> bytes:
+    """
+    Generate PDF report with complete missing items breakdown.
+    
+    Args:
+        sync_results: SyncResults object
+        synced_lists: List of synced list info
+        
+    Returns:
+        bytes: PDF file content
+    """
+    try:
+        # Import weasyprint
+        from weasyprint import HTML, CSS
+        from io import BytesIO
+        
+        # Generate full HTML (will be modified to show ALL items)
+        html_content = generate_full_html_report(sync_results, synced_lists)
+        
+        # Convert HTML to PDF
+        pdf_buffer = BytesIO()
+        HTML(string=html_content).write_pdf(pdf_buffer)
+        pdf_bytes = pdf_buffer.getvalue()
+        
+        logger.info(f"Generated PDF report: {len(pdf_bytes)} bytes")
+        return pdf_bytes
+        
+    except ImportError:
+        logger.warning("weasyprint not installed - cannot generate PDF")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to generate PDF: {e}", exc_info=True)
+        return None
+
+
+def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> str:
+    """
+    Generate HTML for missing items breakdown with movie titles.
+    
+    Args:
+        missing_details: Dictionary with categorized missing items
+        max_items: Maximum items to show per category (default: 5)
+        
+    Returns:
+        HTML string with formatted missing items
+    """
+    if not missing_details:
+        return ""
+    
+    html = '<div class="missing-breakdown-detailed">'
+    html += '<div class="missing-header">Missing Items:</div>'
+    
+    # Pending items
+    pending_items = missing_details.get('pending', [])
+    if len(pending_items) > 0:
+        html += '<div class="missing-category">'
+        html += f'<div class="category-title">🔄 Pending Download ({len(pending_items)} movies)</div>'
+        html += '<ul class="movie-list">'
+        
+        for item in pending_items[:max_items]:
+            year_str = f" ({item['year']})" if item.get('year') else ""
+            html += f"<li>{item['title']}{year_str}</li>"
+        
+        if len(pending_items) > max_items:
+            remaining = len(pending_items) - max_items
+            html += f'<li class="more-items">... and {remaining} more pending</li>'
+        
+        html += '</ul></div>'
+    
+    # Blocked items
+    blocked_items = missing_details.get('blocked', [])
+    if len(blocked_items) > 0:
+        html += '<div class="missing-category">'
+        html += f'<div class="category-title">⛔ Blocked by Radarr Exclusions ({len(blocked_items)} movies)</div>'
+        html += '<ul class="movie-list">'
+        
+        for item in blocked_items[:max_items]:
+            year_str = f" ({item['year']})" if item.get('year') else ""
+            html += f"<li>{item['title']}{year_str}</li>"
+        
+        if len(blocked_items) > max_items:
+            remaining = len(blocked_items) - max_items
+            html += f'<li class="more-items">... and {remaining} more blocked</li>'
+        
+        html += '</ul></div>'
+    
+    # Not found items
+    not_found_items = missing_details.get('not_found', [])
+    if len(not_found_items) > 0:
+        html += '<div class="missing-category">'
+        html += f'<div class="category-title">❌ Not Found in Overseerr ({len(not_found_items)} movies)</div>'
+        html += '<ul class="movie-list">'
+        
+        for item in not_found_items[:max_items]:
+            year_str = f" ({item['year']})" if item.get('year') else ""
+            html += f"<li>{item['title']}{year_str}</li>"
+        
+        if len(not_found_items) > max_items:
+            remaining = len(not_found_items) - max_items
+            html += f'<li class="more-items">... and {remaining} more not found</li>'
+        
+        html += '</ul></div>'
+    
+    # Error items
+    error_items = missing_details.get('errors', [])
+    if len(error_items) > 0:
+        html += '<div class="missing-category">'
+        html += f'<div class="category-title">❗ Processing Errors ({len(error_items)} movies)</div>'
+        html += '<ul class="movie-list">'
+        
+        for item in error_items[:max_items]:
+            year_str = f" ({item['year']})" if item.get('year') else ""
+            error_type = item.get('error_type', 'error')
+            html += f"<li>{item['title']}{year_str} <span style='opacity:0.6'>({error_type})</span></li>"
+        
+        if len(error_items) > max_items:
+            remaining = len(error_items) - max_items
+            html += f'<li class="more-items">... and {remaining} more errors</li>'
+        
+        html += '</ul></div>'
+    
+    html += '</div>'
+    return html
+
+
+def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_category: int = 5) -> str:
+    """
+    Generate HTML content
+    
+    Args:
+        sync_results: Sync results object
+        list_breakdown: List of list statistics with missing item details
+        max_items_per_category: Maximum items to show per category
+    """
     
     # Calculate totals
     total_items = sync_results.total_items
@@ -248,6 +434,54 @@ def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
             border-top: 1px solid #333;
             font-size: 13px;
         }}
+        .missing-breakdown-detailed {{
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }}
+        .missing-header {{
+            font-weight: 600;
+            margin-bottom: 12px;
+            font-size: 14px;
+            opacity: 0.9;
+        }}
+        .missing-category {{
+            margin: 15px 0;
+            background: #252525;
+            border-radius: 6px;
+            padding: 12px 15px;
+        }}
+        .category-title {{
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+        }}
+        .movie-list {{
+            list-style: none;
+            padding: 0 0 0 10px;
+            margin: 0;
+        }}
+        .movie-list li {{
+            padding: 5px 0;
+            font-size: 12px;
+            opacity: 0.85;
+            border-bottom: 1px solid #2a2a2a;
+            line-height: 1.4;
+        }}
+        .movie-list li:last-child {{
+            border-bottom: none;
+        }}
+        .movie-list li:before {{
+            content: "• ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 6px;
+        }}
+        .more-items {{
+            opacity: 0.6;
+            font-style: italic;
+        }}
         .missing-item {{
             display: inline-block;
             margin: 5px 10px 5px 0;
@@ -348,23 +582,11 @@ def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
 """
             continue
         
-        # Normal list with data
+        # Normal list with data - generate detailed missing items breakdown
         missing_items_html = ""
-        if lst['missing'] > 0:
-            missing_parts = []
-            if lst['pending'] > 0:
-                missing_parts.append(f"<span class='missing-item'>🔄 {lst['pending']} pending</span>")
-            if lst['blocked'] > 0:
-                missing_parts.append(f"<span class='missing-item'>⛔ {lst['blocked']} blocked</span>")
-            if lst['not_found'] > 0:
-                missing_parts.append(f"<span class='missing-item'>❌ {lst['not_found']} not found</span>")
-            if lst['errors'] > 0:
-                missing_parts.append(f"<span class='missing-item'>❗ {lst['errors']} errors</span>")
-            missing_items_html = f"""
-            <div class="missing-breakdown">
-                <strong>Missing:</strong> {' '.join(missing_parts)}
-            </div>
-"""
+        if lst['missing'] > 0 and lst.get('missing_details'):
+            # Generate detailed breakdown with movie titles
+            missing_items_html = _generate_missing_items_html(lst['missing_details'], max_items=max_items_per_category)
         
         html += f"""
             <div class="list-item">
@@ -465,16 +687,25 @@ def send_sync_report(sync_results, synced_lists):
     
     try:
         logger.info("Generating HTML report...")
-        # Generate HTML
+        # Generate HTML (with 5 items per category for email body)
         html = generate_html_report(sync_results, synced_lists)
         logger.info(f"HTML generated: {len(html)} bytes")
         
-        # Send email
+        # Generate PDF attachment (with ALL items for complete details)
+        logger.info("Generating PDF attachment...")
+        pdf_data = generate_pdf_report(sync_results, synced_lists)
+        if pdf_data:
+            logger.info(f"PDF generated: {len(pdf_data)} bytes")
+        else:
+            logger.warning("PDF generation failed or weasyprint not available")
+        
+        # Send email with PDF attachment
         subject = f"List-Sync Report - {datetime.now().strftime('%Y-%m-%d')}"
         logger.info(f"Sending email: {subject}")
         
         from .email_sender import send_email
-        result = send_email(subject, html, html=True)
+        pdf_filename = f"ListSync_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
+        result = send_email(subject, html, html=True, pdf_attachment=pdf_data, pdf_filename=pdf_filename)
         
         if result:
             logger.info(f"✅ Sync report sent/saved: {result}")

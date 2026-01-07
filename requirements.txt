@@ -5,5 +5,5 @@ colorama>=0.4.6
 python-dotenv>=1.0.0
 discord-webhook>=1.3.0
 halo>=0.0.31 
-# Email reports (optional)
-# jinja2==3.1.2
+# Email reports with PDF attachments
+weasyprint>=60.0
