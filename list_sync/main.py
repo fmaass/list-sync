@@ -1728,6 +1728,22 @@ def main():
         from .config import ConfigManager
         config_manager = ConfigManager()
         
+        # If SKIP_SETUP is set, ensure environment config is migrated to database first
+        if skip_setup and not config_manager.is_setup_complete():
+            if config_manager.has_env_config():
+                logging.info("SKIP_SETUP=true: Auto-migrating environment configuration to database...")
+                print("\n⚡ Auto-configuring from environment variables...\n")
+                try:
+                    migrated_count = config_manager.migrate_env_to_database()
+                    from .config import load_env_lists
+                    load_env_lists()
+                    config_manager.mark_setup_complete()
+                    from .blocklist import load_blocklist
+                    load_blocklist()
+                    print("✅ Auto-configuration complete!\n")
+                except Exception as e:
+                    logging.error(f"Auto-migration failed: {e}")
+        
         # First, do a silent check (no messages) - unless SKIP_SETUP is set
         if not skip_setup and not config_manager.is_setup_complete():
             # Check if we have complete env var configuration
