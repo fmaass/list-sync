@@ -60,19 +60,31 @@ def generate_html_report(sync_results, synced_lists) -> str:
             
             total = len(items)
             
-            # Skip lists with no items (not synced yet or test data)
-            if total == 0:
-                logger.debug(f"Skipping list {list_type}:{list_id} - no items in database")
-                continue
-            
-            missing = total - stats['in_library']
-            coverage_pct = (stats['in_library'] / total * 100) if total > 0 else 0
-            
             # Format list name
             if 'external/' in list_id:
                 display_name = f"List {list_id.split('/')[-1]}"
             else:
                 display_name = list_id[-40:] if len(list_id) > 40 else list_id
+            
+            # If list has no items yet, show it but indicate it hasn't been synced
+            if total == 0:
+                logger.debug(f"List {list_type}:{list_id} has no items yet - showing as not synced")
+                list_breakdown.append({
+                    'name': display_name,
+                    'total': 0,
+                    'in_library': 0,
+                    'missing': 0,
+                    'coverage_pct': 0,
+                    'pending': 0,
+                    'blocked': 0,
+                    'not_found': 0,
+                    'errors': 0,
+                    'not_synced': True  # Flag to show different display
+                })
+                continue
+            
+            missing = total - stats['in_library']
+            coverage_pct = (stats['in_library'] / total * 100) if total > 0 else 0
             
             list_breakdown.append({
                 'name': display_name,
@@ -83,14 +95,15 @@ def generate_html_report(sync_results, synced_lists) -> str:
                 'pending': stats['pending'],
                 'blocked': stats['blocked'],
                 'not_found': stats['not_found'],
-                'errors': stats['errors']
+                'errors': stats['errors'],
+                'not_synced': False
             })
             
         except Exception as e:
             logger.warning(f"Failed to get stats for list {list_type}:{list_id}: {e}")
     
-    # Sort by coverage (worst first)
-    list_breakdown.sort(key=lambda x: x['coverage_pct'])
+    # Sort by coverage (worst first), but put unsynced lists at the end
+    list_breakdown.sort(key=lambda x: (x.get('not_synced', False), x['coverage_pct']))
     
     # Generate HTML
     html = _generate_html(sync_results, list_breakdown)
@@ -320,6 +333,22 @@ def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
     
     # Add each list
     for lst in list_breakdown:
+        # Handle lists that haven't been synced yet
+        if lst.get('not_synced', False):
+            html += f"""
+            <div class="list-item" style="opacity: 0.6;">
+                <div class="list-header">
+                    <div class="list-name">📋 {lst['name']}</div>
+                    <div class="list-stats" style="opacity: 0.7;">Not synced yet</div>
+                </div>
+                <div style="padding: 10px 0; opacity: 0.7; font-size: 13px;">
+                    ⏳ This list will be populated after the next sync
+                </div>
+            </div>
+"""
+            continue
+        
+        # Normal list with data
         missing_items_html = ""
         if lst['missing'] > 0:
             missing_parts = []
