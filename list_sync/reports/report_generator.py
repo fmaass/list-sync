@@ -52,6 +52,7 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
                 'blocked': [],
                 'not_found': [],
                 'errors': [],
+                'request_failed': [],  # Separate from errors
                 'skipped': []
             }
             
@@ -87,18 +88,40 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
                         'year': year
                     })
                     
-                elif status in ['error', 'request_failed']:
+                elif status == 'request_failed':
+                    stats['errors'] += 1
+                    missing_items_details['request_failed'].append({
+                        'title': title,
+                        'year': year,
+                        'error_type': 'request_failed'
+                    })
+                    
+                elif status == 'error':
                     stats['errors'] += 1
                     missing_items_details['errors'].append({
                         'title': title,
                         'year': year,
-                        'error_type': status
+                        'error_type': 'error'
                     })
             
             total = len(items)
             
-            # Format list name
-            if 'external/' in list_id:
+            # Format list name - extract meaningful parts from URL
+            if 'mdblist.com/lists/' in list_id:
+                # Extract username and list ID from MDBList URL
+                # https://mdblist.com/lists/moviemarder/external/66765 -> "moviemarder/66765"
+                parts = list_id.split('/')
+                if 'external' in parts:
+                    idx = parts.index('external')
+                    username = parts[idx - 1] if idx > 0 else 'unknown'
+                    list_num = parts[-1] if len(parts) > idx else 'unknown'
+                    display_name = f"{username}/{list_num}"
+                elif len(parts) >= 2:
+                    # Format: username/listname
+                    display_name = '/'.join(parts[-2:])
+                else:
+                    display_name = parts[-1] if parts else list_id[-40:]
+            elif 'external/' in list_id:
                 display_name = f"List {list_id.split('/')[-1]}"
             else:
                 display_name = list_id[-40:] if len(list_id) > 40 else list_id
@@ -267,7 +290,24 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         
         html += '</ul></div>'
     
-    # Error items
+    # Request failed items (separate from errors)
+    request_failed_items = missing_details.get('request_failed', [])
+    if len(request_failed_items) > 0:
+        html += '<div class="missing-category">'
+        html += f'<div class="category-title">⚠️ Request Failed ({len(request_failed_items)} movies)</div>'
+        html += '<ul class="movie-list">'
+        
+        for item in request_failed_items[:max_items]:
+            year_str = f" ({item['year']})" if item.get('year') else ""
+            html += f"<li>{item['title']}{year_str}</li>"
+        
+        if len(request_failed_items) > max_items:
+            remaining = len(request_failed_items) - max_items
+            html += f'<li class="more-items">... and {remaining} more failed</li>'
+        
+        html += '</ul></div>'
+    
+    # Processing error items (actual errors, not request failures)
     error_items = missing_details.get('errors', [])
     if len(error_items) > 0:
         html += '<div class="missing-category">'
@@ -299,17 +339,20 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         max_items_per_category: Maximum items to show per category
     """
     
-    # Calculate totals
+    # Calculate totals from all possible status keys
     total_items = sync_results.total_items
     in_library = sync_results.results.get('already_available', 0) + sync_results.results.get('skipped', 0)
     pending = sync_results.results.get('already_requested', 0) + sync_results.results.get('requested', 0)
     blocked = sync_results.results.get('blocked', 0)
     not_found = sync_results.results.get('not_found', 0)
-    errors = sync_results.results.get('error', 0) + sync_results.results.get('request_failed', 0)
+    # Separate request_failed from other errors
+    request_failed = sync_results.results.get('request_failed', 0)
+    errors = sync_results.results.get('error', 0)
     
     in_library_pct = (in_library / total_items * 100) if total_items > 0 else 0
     pending_pct = (pending / total_items * 100) if total_items > 0 else 0
     blocked_pct = (blocked / total_items * 100) if total_items > 0 else 0
+    request_failed_pct = (request_failed / total_items * 100) if total_items > 0 else 0
     
     # Format duration
     duration_mins = int(sync_results.start_time // 60) if hasattr(sync_results, 'start_time') else 0
@@ -540,6 +583,11 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <div class="stat-label">Blocked</div>
                     <div class="stat-number">{blocked}</div>
                     <div class="stat-pct">{blocked_pct:.1f}%</div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="stat-label">Request Failed</div>
+                    <div class="stat-number">{request_failed}</div>
+                    <div class="stat-pct">{request_failed_pct:.1f}%</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Not Found</div>
