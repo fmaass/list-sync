@@ -1844,7 +1844,8 @@ def main():
         url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
         
         # If in automated mode OR skip setup flag is set, bypass menu and start syncing
-        if (url and api_key and automated_mode) or skip_setup:
+        # But ensure we have valid credentials first
+        if ((url and api_key and automated_mode) or skip_setup) and url and api_key:
             logging.info("Starting in automated mode")
             overseerr_client = OverseerrClient(url, api_key, user_id)
             try:
