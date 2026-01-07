@@ -1902,11 +1902,15 @@ def main():
                 _load_env_lists()
                 
                 # Always use the database sync interval (which was initialized from env if needed)
+                logging.info(f"🔍 DEBUG: sync_interval = {sync_interval}")
+                print(f"🔍 DEBUG: sync_interval = {sync_interval}")
                 if sync_interval > 0:
                     logging.info(f"Starting automated sync with {sync_interval} hour interval (from database)")
+                    print(f"Starting automated sync with {sync_interval} hour interval (from database)")
                     automated_sync(overseerr_client, sync_interval, is_4k, automated_mode)
                 else:
                     logging.info("Running one-time sync in automated mode (no interval configured)")
+                    print("Running one-time sync in automated mode (no interval configured)")
                     run_sync(overseerr_client, is_4k=is_4k, automated_mode=automated_mode)
                     sys.exit(0)
             except Exception as e:
