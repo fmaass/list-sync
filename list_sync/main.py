@@ -980,6 +980,8 @@ def automated_sync(
         is_4k (bool, optional): Whether to request 4K. Defaults to False.
         automated_mode (bool, optional): Whether to run in automated mode. Defaults to True.
     """
+    logging.info(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
+    print(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
     # Current interval - will be updated from database
     current_interval_hours = initial_interval_hours
     
@@ -1299,6 +1301,8 @@ def automated_sync(
     # Perform initial sync (always force full sync on startup)
     # This ensures that on app reboot, we always sync all configured lists,
     # not just process queued single list syncs
+    logging.info("🚀 Calling perform_sync(force_full_sync=True) for initial sync")
+    print("🚀 Calling perform_sync(force_full_sync=True) for initial sync")
     perform_sync(force_full_sync=True)
     
     while True:
