@@ -1946,8 +1946,10 @@ def main():
         print("\n\n👋 Exiting. Goodbye!")
         sys.exit(0)
     except Exception as e:
-        logging.error(f"Unhandled exception: {str(e)}")
+        logging.error(f"Unhandled exception: {str(e)}", exc_info=True)
         print(f"\n❌ An error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
