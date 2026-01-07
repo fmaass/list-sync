@@ -1877,9 +1877,16 @@ def main():
             print("✅ Starting in automated mode")
             
             try:
-                logging.info(f"🔍 DEBUG: Creating OverseerrClient with url={url}, user_id={user_id}")
+                import sys
+                sys.stdout.flush()  # Flush any buffered output
+                sys.stderr.flush()
+                logging.info(f"🔍 DEBUG: Inside try block - Creating OverseerrClient with url={url}, user_id={user_id}")
+                print(f"🔍 DEBUG: Inside try block - Creating OverseerrClient")
+                sys.stdout.flush()
+                
                 overseerr_client = OverseerrClient(url, api_key, user_id)
                 logging.info("✅ OverseerrClient created successfully")
+                print("✅ OverseerrClient created successfully")
             except Exception as e:
                 logging.error(f"❌ Failed to create OverseerrClient: {e}")
                 print(f"❌ Failed to create OverseerrClient: {e}")
