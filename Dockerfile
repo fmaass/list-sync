@@ -77,7 +77,7 @@ RUN npm run build
 # Stage 3: Final Runtime Image
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
-# Install system dependencies for Chrome, Node.js, and process management
+# Install system dependencies for Chrome, Node.js, process management, and PDF generation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Chrome dependencies
     wget \
@@ -89,6 +89,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libappindicator3-1 \
     libgbm-dev \
     libgtk-3-0 \
+    # WeasyPrint dependencies for PDF generation
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
     libx11-xcb1 \
     libxtst6 \
     xdg-utils \
@@ -230,6 +237,7 @@ RUN mkdir -p /usr/src/app/data /tmp/.X11-unix /var/log/supervisor && \
     chmod 1777 /tmp/.X11-unix
 
 # Create wrapper script for listsync-core to output to both file and stdout
+# Environment variables are preserved via supervisor's clear_env=false setting
 RUN echo '#!/bin/bash' > /usr/src/app/run-listsync-core.sh && \
     echo 'exec /usr/src/app/.venv/bin/python -m list_sync 2>&1 | while IFS= read -r line; do echo "$(date "+%Y-%m-%d %H:%M:%S") $line"; done | tee -a /var/log/supervisor/listsync-core.log' >> /usr/src/app/run-listsync-core.sh && \
     chmod +x /usr/src/app/run-listsync-core.sh
@@ -337,6 +345,7 @@ RUN echo "[supervisord]" > /etc/supervisor/conf.d/listsync.conf && \
     echo "directory=/usr/src/app" >> /etc/supervisor/conf.d/listsync.conf && \
     echo "autostart=true" >> /etc/supervisor/conf.d/listsync.conf && \
     echo "autorestart=true" >> /etc/supervisor/conf.d/listsync.conf && \
+    echo "clear_env=false" >> /etc/supervisor/conf.d/listsync.conf && \
     echo "stdout_logfile=/dev/stdout" >> /etc/supervisor/conf.d/listsync.conf && \
     echo "stderr_logfile=/dev/stderr" >> /etc/supervisor/conf.d/listsync.conf && \
     echo "stdout_logfile_maxbytes=0" >> /etc/supervisor/conf.d/listsync.conf && \
