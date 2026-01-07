@@ -1723,6 +1723,8 @@ def main():
         
         # Check for explicit skip setup flag (for Docker/production deployments)
         skip_setup = os.getenv('SKIP_SETUP', 'false').lower() == 'true'
+        logging.info(f"🔍 DEBUG: SKIP_SETUP = {skip_setup}")
+        print(f"🔍 DEBUG: SKIP_SETUP = {skip_setup}")
         
         # Check if setup is complete before proceeding
         from .config import ConfigManager
@@ -1842,22 +1844,32 @@ def main():
         
         # If SKIP_SETUP, use environment variables directly (bypass database)
         if skip_setup:
-            logging.info("SKIP_SETUP=true: Using environment variables directly")
+            logging.info("🔍 SKIP_SETUP=true: Using environment variables directly")
+            print("🔍 SKIP_SETUP=true: Using environment variables directly")
             url = os.getenv('OVERSEERR_URL')
             api_key = os.getenv('OVERSEERR_API_KEY')
             user_id = os.getenv('OVERSEERR_USER_ID', '1')
             automated_mode = True
             is_4k = os.getenv('OVERSEERR_4K', 'false').lower() == 'true'
             
+            logging.info(f"🔍 DEBUG: url={url}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+            print(f"🔍 DEBUG: url={url}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+            
             if url and api_key:
-                logging.info(f"Credentials loaded from environment: URL={url}, user_id={user_id}")
+                logging.info(f"✅ Credentials loaded from environment: URL={url}, user_id={user_id}")
+                print(f"✅ Credentials loaded from environment: URL={url}, user_id={user_id}")
         else:
+            logging.info("🔍 SKIP_SETUP=false: Using normal flow")
             # Normal flow: Check database/environment
             url, api_key, user_id, _, automated_mode, is_4k = load_env_config()
         
         # If in automated mode with valid credentials, bypass menu and start syncing
+        logging.info(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+        print(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
+        
         if url and api_key and automated_mode:
-            logging.info("Starting in automated mode")
+            logging.info("✅ Starting in automated mode")
+            print("✅ Starting in automated mode")
             overseerr_client = OverseerrClient(url, api_key, user_id)
             try:
                 # Test connection to make sure credentials are valid
