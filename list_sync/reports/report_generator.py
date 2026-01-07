@@ -59,6 +59,12 @@ def generate_html_report(sync_results, synced_lists) -> str:
                     stats['errors'] += 1
             
             total = len(items)
+            
+            # Skip lists with no items (not synced yet or test data)
+            if total == 0:
+                logger.debug(f"Skipping list {list_type}:{list_id} - no items in database")
+                continue
+            
             missing = total - stats['in_library']
             coverage_pct = (stats['in_library'] / total * 100) if total > 0 else 0
             
@@ -298,6 +304,17 @@ def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
         <!-- Per-List Breakdown -->
         <div class="list-section">
             <h2>📋 List Breakdown ({len(list_breakdown)} lists)</h2>
+"""
+    
+    # Check if we have list data
+    if len(list_breakdown) == 0:
+        html += """
+            <div style="background: #2a2a2a; padding: 30px; border-radius: 8px; text-align: center; opacity: 0.7;">
+                <p style="margin: 0;">No per-list data available yet. List breakdown will appear after the first sync completes.</p>
+            </div>
+"""
+    else:
+        html += """
             <p style="opacity: 0.7; margin-bottom: 20px;">Sorted by coverage (lowest first)</p>
 """
     
@@ -350,6 +367,50 @@ def _generate_html(sync_results, list_breakdown: List[Dict]) -> str:
     return html
 
 
+def _should_send_report() -> bool:
+    """
+    Check if we should send a report based on schedule.
+    Reports are sent once per day at 3am.
+    
+    Returns:
+        bool: True if report should be sent
+    """
+    from pathlib import Path
+    
+    # Get report schedule settings
+    report_hour = int(os.getenv('EMAIL_REPORT_HOUR', '3'))  # Default: 3am
+    
+    # Check if we've already sent today
+    try:
+        from ..utils.logger import DATA_DIR
+        last_sent_file = Path(DATA_DIR) / "reports" / ".last_report_sent"
+        
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        if last_sent_file.exists():
+            last_sent_date = last_sent_file.read_text().strip()
+            if last_sent_date == today:
+                logger.debug(f"Report already sent today ({today})")
+                return False
+        
+        # Check if current hour is the scheduled hour (or within 1 hour after)
+        current_hour = datetime.now().hour
+        if current_hour != report_hour and current_hour != (report_hour + 1) % 24:
+            logger.debug(f"Not report time. Current hour: {current_hour}, scheduled: {report_hour}")
+            return False
+        
+        # Mark as sent for today
+        last_sent_file.parent.mkdir(parents=True, exist_ok=True)
+        last_sent_file.write_text(today)
+        
+        return True
+        
+    except Exception as e:
+        logger.warning(f"Error checking report schedule: {e}")
+        # If there's an error, send the report anyway
+        return True
+
+
 def send_sync_report(sync_results, synced_lists):
     """
     Generate and send sync report
@@ -366,6 +427,11 @@ def send_sync_report(sync_results, synced_lists):
     
     if not enabled:
         logger.info("Email reports disabled (EMAIL_REPORT_ENABLED=false)")
+        return
+    
+    # Check if we should send based on schedule
+    if not _should_send_report():
+        logger.info("Skipping report - not scheduled time or already sent today")
         return
     
     try:
