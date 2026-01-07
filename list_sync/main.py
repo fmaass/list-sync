@@ -1898,7 +1898,8 @@ def main():
                 
                 # Load lists from environment (important for SKIP_SETUP mode)
                 logging.info("Loading lists from environment...")
-                load_env_lists()
+                from .config import load_env_lists as _load_env_lists
+                _load_env_lists()
                 
                 # Always use the database sync interval (which was initialized from env if needed)
                 if sync_interval > 0:
