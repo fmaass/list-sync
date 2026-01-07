@@ -1867,6 +1867,11 @@ def main():
         logging.info(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
         print(f"🔍 DEBUG: Checking automated mode - url={'SET' if url else 'NONE'}, api_key={'SET' if api_key else 'NONE'}, automated_mode={automated_mode}")
         
+        # Debug: Check the actual condition evaluation
+        condition_result = bool(url and api_key and automated_mode)
+        logging.info(f"🔍 DEBUG: Condition (url and api_key and automated_mode) = {condition_result}")
+        print(f"🔍 DEBUG: Condition (url and api_key and automated_mode) = {condition_result}")
+        
         if url and api_key and automated_mode:
             logging.info("✅ Starting in automated mode")
             print("✅ Starting in automated mode")
