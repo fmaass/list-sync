@@ -14,14 +14,15 @@ from ..database import get_list_items
 logger = logging.getLogger(__name__)
 
 
-def generate_html_report(sync_results, synced_lists, max_items_per_category: int = 5) -> str:
+def generate_html_report(sync_results, synced_lists, max_items_per_category: int = 5, overseerr_url: str = None) -> str:
     """
     Generate HTML email report
     
     Args:
         sync_results: SyncResults object
         synced_lists: List of synced list info
-        max_items_per_category: Maximum items to show per category (default: 5 for email, use 999 for PDF)
+        max_items_per_category: Maximum items to show per category (default: 5 for email, use 999 for attachment)
+        overseerr_url: Optional Overseerr URL for generating links to manage movies
         
     Returns:
         str: HTML content
@@ -166,25 +167,27 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
     # Sort by coverage (worst first), but put unsynced lists at the end
     list_breakdown.sort(key=lambda x: (x.get('not_synced', False), x['coverage_pct']))
     
-    # Generate HTML with specified max_items limit
-    html = _generate_html(sync_results, list_breakdown, max_items_per_category)
+    # Generate HTML with specified max_items limit and optional Seerr links
+    html = _generate_html(sync_results, list_breakdown, max_items_per_category, overseerr_url)
     return html
 
 
-def generate_full_html_report(sync_results, synced_lists) -> str:
+def generate_full_html_report(sync_results, synced_lists, overseerr_url: str = None) -> str:
     """
-    Generate FULL HTML report with ALL missing items (for PDF attachment).
-    Same as generate_html_report but shows ALL items, not just 5.
+    Generate FULL HTML report with ALL missing items (for HTML attachment).
+    Same as generate_html_report but shows ALL items with links to Seerr.
     
     Args:
         sync_results: SyncResults object
         synced_lists: List of synced list info
+        overseerr_url: Overseerr URL for generating links
         
     Returns:
-        str: Complete HTML with all items
+        str: Complete HTML with all items and Seerr links
     """
     # Generate report with no item limit (show all items)
-    return generate_html_report(sync_results, synced_lists, max_items_per_category=999)
+    # Pass overseerr_url for link generation
+    return generate_html_report(sync_results, synced_lists, max_items_per_category=999, overseerr_url=overseerr_url)
 
 
 def generate_pdf_report(sync_results, synced_lists) -> bytes:
@@ -222,22 +225,39 @@ def generate_pdf_report(sync_results, synced_lists) -> bytes:
         return None
 
 
-def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> str:
+def _generate_missing_items_html(missing_details: Dict, max_items: int = 5, overseerr_url: str = None) -> str:
     """
-    Generate HTML for missing items breakdown with movie titles.
+    Generate HTML for missing items breakdown with movie titles and links.
     
     Args:
         missing_details: Dictionary with categorized missing items
         max_items: Maximum items to show per category (default: 5)
+        overseerr_url: Optional Overseerr URL for generating management links
         
     Returns:
-        HTML string with formatted missing items
+        HTML string with formatted missing items and optional Seerr links
     """
     if not missing_details:
         return ""
     
     html = '<div class="missing-breakdown-detailed">'
     html += '<div class="missing-header">Missing Items:</div>'
+    
+    # Helper to format movie title with optional Seerr link
+    def format_movie_item(item, overseerr_url=None):
+        title = item['title']
+        year_str = f" ({item['year']})" if item.get('year') else ""
+        
+        # Add link to Seerr if URL provided and item has overseerr_id or tmdb_id
+        if overseerr_url:
+            # Try to construct link (need overseerr_id or could use search)
+            tmdb_id = item.get('tmdb_id')
+            if tmdb_id:
+                # Link format: https://seerr.domain.com/movie/tmdb:[id] or use search
+                seerr_link = f"{overseerr_url.rstrip('/')}/discover/movies?query={title.replace(' ', '%20')}"
+                return f"<a href='{seerr_link}' target='_blank' style='color: #667eea; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+        
+        return f"{title}{year_str}"
     
     # Pending items
     pending_items = missing_details.get('pending', [])
@@ -247,8 +267,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         html += '<ul class="movie-list">'
         
         for item in pending_items[:max_items]:
-            year_str = f" ({item['year']})" if item.get('year') else ""
-            html += f"<li>{item['title']}{year_str}</li>"
+            html += f"<li>{format_movie_item(item, overseerr_url)}</li>"
         
         if len(pending_items) > max_items:
             remaining = len(pending_items) - max_items
@@ -264,8 +283,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         html += '<ul class="movie-list">'
         
         for item in blocked_items[:max_items]:
-            year_str = f" ({item['year']})" if item.get('year') else ""
-            html += f"<li>{item['title']}{year_str}</li>"
+            html += f"<li>{format_movie_item(item, overseerr_url)}</li>"
         
         if len(blocked_items) > max_items:
             remaining = len(blocked_items) - max_items
@@ -281,8 +299,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         html += '<ul class="movie-list">'
         
         for item in not_found_items[:max_items]:
-            year_str = f" ({item['year']})" if item.get('year') else ""
-            html += f"<li>{item['title']}{year_str}</li>"
+            html += f"<li>{format_movie_item(item, overseerr_url)}</li>"
         
         if len(not_found_items) > max_items:
             remaining = len(not_found_items) - max_items
@@ -298,8 +315,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         html += '<ul class="movie-list">'
         
         for item in request_failed_items[:max_items]:
-            year_str = f" ({item['year']})" if item.get('year') else ""
-            html += f"<li>{item['title']}{year_str}</li>"
+            html += f"<li>{format_movie_item(item, overseerr_url)}</li>"
         
         if len(request_failed_items) > max_items:
             remaining = len(request_failed_items) - max_items
@@ -315,9 +331,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
         html += '<ul class="movie-list">'
         
         for item in error_items[:max_items]:
-            year_str = f" ({item['year']})" if item.get('year') else ""
-            error_type = item.get('error_type', 'error')
-            html += f"<li>{item['title']}{year_str} <span style='opacity:0.6'>({error_type})</span></li>"
+            html += f"<li>{format_movie_item(item, overseerr_url)}</li>"
         
         if len(error_items) > max_items:
             remaining = len(error_items) - max_items
@@ -329,7 +343,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5) -> s
     return html
 
 
-def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_category: int = 5) -> str:
+def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_category: int = 5, overseerr_url: str = None) -> str:
     """
     Generate HTML content
     
@@ -337,6 +351,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         sync_results: Sync results object
         list_breakdown: List of list statistics with missing item details
         max_items_per_category: Maximum items to show per category
+        overseerr_url: Optional Overseerr URL for generating management links
     """
     
     # Calculate totals from all possible status keys
@@ -633,8 +648,8 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         # Normal list with data - generate detailed missing items breakdown
         missing_items_html = ""
         if lst['missing'] > 0 and lst.get('missing_details'):
-            # Generate detailed breakdown with movie titles
-            missing_items_html = _generate_missing_items_html(lst['missing_details'], max_items=max_items_per_category)
+            # Generate detailed breakdown with movie titles and optional Seerr links
+            missing_items_html = _generate_missing_items_html(lst['missing_details'], max_items=max_items_per_category, overseerr_url=overseerr_url)
         
         html += f"""
             <div class="list-item">
@@ -734,26 +749,27 @@ def send_sync_report(sync_results, synced_lists):
         return
     
     try:
+        # Get Overseerr URL for generating Seerr links
+        overseerr_url = os.getenv('OVERSEERR_URL', '')
+        
         logger.info("Generating HTML report...")
-        # Generate HTML (with 5 items per category for email body)
-        html = generate_html_report(sync_results, synced_lists)
-        logger.info(f"HTML generated: {len(html)} bytes")
+        # Generate HTML (with 5 items per category for email body, no links)
+        html = generate_html_report(sync_results, synced_lists, max_items_per_category=5)
+        logger.info(f"Email HTML generated: {len(html)} bytes")
         
-        # Generate PDF attachment (with ALL items for complete details)
-        logger.info("Generating PDF attachment...")
-        pdf_data = generate_pdf_report(sync_results, synced_lists)
-        if pdf_data:
-            logger.info(f"PDF generated: {len(pdf_data)} bytes")
-        else:
-            logger.warning("PDF generation failed or weasyprint not available")
+        # Generate FULL HTML attachment (with ALL items and Seerr links)
+        logger.info("Generating complete HTML attachment...")
+        full_html = generate_full_html_report(sync_results, synced_lists, overseerr_url)
+        full_html_bytes = full_html.encode('utf-8')
+        logger.info(f"Attachment HTML generated: {len(full_html_bytes)} bytes ({len(full_html_bytes)/1024:.1f} KB)")
         
-        # Send email with PDF attachment
+        # Send email with HTML attachment (not PDF!)
         subject = f"List-Sync Report - {datetime.now().strftime('%Y-%m-%d')}"
         logger.info(f"Sending email: {subject}")
         
         from .email_sender import send_email
-        pdf_filename = f"ListSync_Report_{datetime.now().strftime('%Y%m%d')}.pdf"
-        result = send_email(subject, html, html=True, pdf_attachment=pdf_data, pdf_filename=pdf_filename)
+        attachment_filename = f"ListSync_Complete_Report_{datetime.now().strftime('%Y%m%d')}.html"
+        result = send_email(subject, html, html=True, pdf_attachment=full_html_bytes, pdf_filename=attachment_filename)
         
         if result:
             logger.info(f"✅ Sync report sent/saved: {result}")
