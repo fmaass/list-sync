@@ -674,16 +674,29 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
             requester_user_id = choose_request_user_id(source_lists, overseerr_client.requester_user_id)
             logging.info(f"🙋 Using Overseerr user_id {requester_user_id} for '{title}'")
             
-            # Check if we should skip this item based on last sync time
-            if not should_sync_item(overseerr_id):
-                logging.info(f"⏭️  SKIP: Recently synced (within skip window)")
-                # Save relationship for all source lists
-                for source_list in source_lists:
-                    save_sync_result(title, media_type, imdb_id, overseerr_id, "skipped", year, tmdb_id, source_list['type'], source_list['id'])
-                return {"title": title, "status": "skipped", "year": year, "media_type": media_type}
-
+            # Check media status in Overseerr
             logging.info(f"🔍 Checking media status in Overseerr...")
             is_available, is_requested, number_of_seasons = overseerr_client.get_media_status(overseerr_id, search_result["mediaType"])
+            
+            # Check if we should skip re-requesting (but still update status accurately)
+            if not should_sync_item(overseerr_id):
+                logging.info(f"⏭️  Recently synced - updating status but not re-requesting")
+                
+                # Determine ACTUAL current status from Overseerr
+                if is_available:
+                    actual_status = "already_available"
+                elif is_requested:
+                    actual_status = "already_requested"
+                else:
+                    actual_status = "not_requested"
+                
+                logging.info(f"📊 Actual status from Overseerr: {actual_status}")
+                
+                # Save with REAL status (not "skipped"!)
+                for source_list in source_lists:
+                    save_sync_result(title, media_type, imdb_id, overseerr_id, actual_status, year, tmdb_id, source_list['type'], source_list['id'])
+                
+                return {"title": title, "status": actual_status, "year": year, "media_type": media_type}
             
             # Log status interpretation for debugging
             if not is_available and not is_requested:
