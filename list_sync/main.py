@@ -1875,7 +1875,16 @@ def main():
         if url and api_key and automated_mode:
             logging.info("✅ Starting in automated mode")
             print("✅ Starting in automated mode")
-            overseerr_client = OverseerrClient(url, api_key, user_id)
+            
+            try:
+                logging.info(f"🔍 DEBUG: Creating OverseerrClient with url={url}, user_id={user_id}")
+                overseerr_client = OverseerrClient(url, api_key, user_id)
+                logging.info("✅ OverseerrClient created successfully")
+            except Exception as e:
+                logging.error(f"❌ Failed to create OverseerrClient: {e}")
+                print(f"❌ Failed to create OverseerrClient: {e}")
+                raise
+            
             try:
                 # Test connection to make sure credentials are valid
                 overseerr_client.test_connection()
