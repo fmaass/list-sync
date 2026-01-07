@@ -1015,6 +1015,8 @@ def automated_sync(
             force_full_sync (bool): If True, skip single list sync checks and perform full sync
             ignore_pause (bool): If True, ignore any pause_until timer (e.g. for manual triggers)
         """
+        logging.info(f"🔄 perform_sync() called: force_full_sync={force_full_sync}, ignore_pause={ignore_pause}")
+        print(f"🔄 perform_sync() called: force_full_sync={force_full_sync}, ignore_pause={ignore_pause}")
         # Honor pause-until if set (from prior cancellation)
         try:
             if not ignore_pause:
