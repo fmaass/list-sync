@@ -959,10 +959,25 @@ def send_sync_report(sync_results, synced_lists, overseerr_client=None):
         logger.info("Email reports disabled (EMAIL_REPORT_ENABLED=false)")
         return
     
-    # Check if we should send based on schedule
-    if not _should_send_report():
-        logger.info("Skipping report - not scheduled time or already sent today")
-        return
+    # Check if we should send based on schedule (only check if already sent today)
+    from pathlib import Path
+    from ..utils.logger import DATA_DIR
+    
+    try:
+        last_sent_file = Path(DATA_DIR) / "reports" / ".last_report_sent"
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        if last_sent_file.exists():
+            last_sent_date = last_sent_file.read_text().strip()
+            if last_sent_date == today:
+                logger.info(f"Report already sent today ({today})")
+                return
+        
+        # Mark as sent for today
+        last_sent_file.parent.mkdir(parents=True, exist_ok=True)
+        last_sent_file.write_text(today)
+    except Exception as e:
+        logger.warning(f"Error checking last sent date: {e}")
     
     try:
         # Get Overseerr URL for generating Seerr links

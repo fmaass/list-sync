@@ -966,6 +966,66 @@ def sync_media_to_overseerr(
     return sync_results
 
 
+def schedule_daily_report(overseerr_client: OverseerrClient):
+    """
+    Schedule daily email reports at 3 AM (independent of sync timing).
+    Runs in a separate thread.
+    
+    Args:
+        overseerr_client: OverseerrClient for querying pending requests
+    """
+    import datetime
+    import time
+    
+    def run_daily_report():
+        """Generate and send report at scheduled hour"""
+        while True:
+            try:
+                # Get report schedule settings
+                report_hour = int(os.getenv('EMAIL_REPORT_HOUR', '3'))
+                current_hour = datetime.datetime.now().hour
+                
+                # Check if it's report time
+                if current_hour == report_hour:
+                    logging.info(f"⏰ Report time! Generating email report at {report_hour}:00")
+                    
+                    # Get data from database
+                    from .ui.display import SyncResults
+                    from .database import load_list_ids, DB_FILE
+                    import sqlite3
+                    
+                    sync_results = SyncResults()
+                    with sqlite3.connect(DB_FILE) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute('SELECT COUNT(*) FROM synced_items')
+                        sync_results.total_items = cursor.fetchone()[0] or 0
+                        cursor.execute('SELECT status, COUNT(*) FROM synced_items GROUP BY status')
+                        for status, count in cursor.fetchall():
+                            if status in sync_results.results:
+                                sync_results.results[status] = count
+                    
+                    synced_lists = [{'type': l['type'], 'id': l['id'], 'item_count': 0} for l in load_list_ids()]
+                    
+                    # Generate and send report
+                    from .reports.report_generator import send_sync_report
+                    send_sync_report(sync_results, synced_lists, overseerr_client)
+                    
+                    # Sleep for 1 hour to avoid sending multiple times in same hour
+                    time.sleep(3600)
+                else:
+                    # Sleep for 10 minutes and check again
+                    time.sleep(600)
+                    
+            except Exception as e:
+                logging.error(f"Error in daily report scheduler: {e}", exc_info=True)
+                time.sleep(600)  # Wait 10 minutes before retrying
+    
+    # Start scheduler thread
+    report_thread = threading.Thread(target=run_daily_report, daemon=True, name="DailyReportScheduler")
+    report_thread.start()
+    logging.info(f"📧 Daily report scheduler started (will send at {os.getenv('EMAIL_REPORT_HOUR', '3')}:00)")
+
+
 def automated_sync(
     overseerr_client: OverseerrClient,
     initial_interval_hours: float,
@@ -983,6 +1043,11 @@ def automated_sync(
     """
     logging.info(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
     print(f"🚀 automated_sync() called with interval={initial_interval_hours} hours")
+    
+    # Start daily report scheduler (independent of sync timing)
+    if os.getenv('EMAIL_REPORT_ENABLED', 'false').lower() == 'true':
+        schedule_daily_report(overseerr_client)
+    
     # Current interval - will be updated from database
     current_interval_hours = initial_interval_hours
     
