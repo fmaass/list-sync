@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
 
-from ..database import get_list_items, get_newcomers, get_removals
+from ..database import get_list_items, get_newcomers, get_removals, get_repeated_failures, get_list_staleness
 
 logger = logging.getLogger(__name__)
 
@@ -355,15 +355,43 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         overseerr_url: Optional Overseerr URL for generating management links
     """
     
-    # Calculate totals from all possible status keys
-    total_items = sync_results.total_items
-    in_library = sync_results.results.get('already_available', 0) + sync_results.results.get('skipped', 0)
-    pending = sync_results.results.get('already_requested', 0) + sync_results.results.get('requested', 0)
-    blocked = sync_results.results.get('blocked', 0)
-    not_found = sync_results.results.get('not_found', 0)
-    # Separate request_failed from other errors
-    request_failed = sync_results.results.get('request_failed', 0)
-    errors = sync_results.results.get('error', 0)
+    # Calculate overview stats FROM DATABASE for accuracy
+    import sqlite3
+    from ..database import DB_FILE
+    
+    total_items = 1
+    in_library = 0
+    pending = 0
+    blocked = 0
+    not_found = 0
+    request_failed = 0
+    errors = 0
+    
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM synced_items')
+            total_items = cursor.fetchone()[0] or 1
+            
+            cursor.execute('SELECT status, COUNT(*) FROM synced_items GROUP BY status')
+            status_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            
+            in_library = status_counts.get('already_available', 0) + status_counts.get('skipped', 0)
+            pending = status_counts.get('already_requested', 0) + status_counts.get('requested', 0)
+            blocked = status_counts.get('blocked', 0)
+            not_found = status_counts.get('not_found', 0)
+            request_failed = status_counts.get('request_failed', 0)
+            errors = status_counts.get('error', 0)
+    except Exception as e:
+        logger.warning(f"Failed to get stats from database: {e}")
+        # Fallback to sync_results
+        total_items = sync_results.total_items if sync_results.total_items > 0 else 1
+        in_library = sync_results.results.get('already_available', 0) + sync_results.results.get('skipped', 0)
+        pending = sync_results.results.get('already_requested', 0) + sync_results.results.get('requested', 0)
+        blocked = sync_results.results.get('blocked', 0)
+        not_found = sync_results.results.get('not_found', 0)
+        request_failed = sync_results.results.get('request_failed', 0)
+        errors = sync_results.results.get('error', 0)
     
     in_library_pct = (in_library / total_items * 100) if total_items > 0 else 0
     pending_pct = (pending / total_items * 100) if total_items > 0 else 0
@@ -578,7 +606,63 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         <!-- Header -->
         <div class="header">
             <h1>🎬 List-Sync Report</h1>
-            <p>{datetime.now().strftime('%B %d, %Y at %H:%M')} | {total_items} items processed in {duration_mins}m {duration_secs}s</p>
+            <p>{datetime.now().strftime('%B %d, %Y at %H:%M')} | {total_items} items tracked</p>
+        </div>
+        
+        <!-- Health Summary -->
+"""
+    
+    # Calculate action required count
+    action_count = 0
+    action_items = []
+    
+    # Check for manual approvals needed
+    if overseerr_client:
+        try:
+            pending_requests = overseerr_client.get_pending_requests(limit=50)
+            manual_user_id = os.getenv('MANUAL_APPROVAL_USER_ID', '2')
+            manual_requests = [r for r in pending_requests if str(r.get('requested_by_id')) == str(manual_user_id)]
+            if manual_requests:
+                action_count += len(manual_requests)
+                action_items.append(f"{len(manual_requests)} request{'s' if len(manual_requests) > 1 else ''} need manual approval")
+        except:
+            pass
+    
+    # Check for failures
+    if request_failed > 0:
+        action_count += request_failed
+        action_items.append(f"{request_failed} request{'s' if request_failed > 1 else ''} failed")
+    
+    # Health summary
+    if action_count > 0:
+        health_status = "warning"
+        health_icon = "⚠️"
+        health_text = f"{action_count} item{'s' if action_count > 1 else ''} need attention"
+        health_color = "#fbbf24"
+    else:
+        health_status = "success"
+        health_icon = "✅"
+        health_text = f"All systems healthy - {in_library} in library, {pending} downloading"
+        health_color = "#22c55e"
+    
+    html += f"""
+        <div style="background: rgba({'251, 191, 36' if health_status == 'warning' else '34, 197, 94'}, 0.1); padding: 20px; margin: 20px 30px; border-radius: 8px; border-left: 4px solid {health_color};">
+            <h2 style="margin: 0; color: {health_color};">{health_icon} {health_text}</h2>
+"""
+    
+    if action_items:
+        html += """
+            <ul style="margin: 15px 0 0 0; padding-left: 20px; opacity: 0.9;">
+"""
+        for item in action_items:
+            html += f"""
+                <li>{item}</li>
+"""
+        html += """
+            </ul>
+"""
+    
+    html += """
         </div>
         
         <!-- Overview -->
@@ -591,7 +675,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <div class="stat-pct">{in_library_pct:.1f}%</div>
                 </div>
                 <div class="stat-card warning">
-                    <div class="stat-label">Pending Download</div>
+                    <div class="stat-label">Approved & Downloading</div>
                     <div class="stat-number">{pending}</div>
                     <div class="stat-pct">{pending_pct:.1f}%</div>
                 </div>
@@ -730,9 +814,10 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             manual_requests = [r for r in pending_requests if str(r.get('requested_by_id')) == str(manual_user_id)]
             auto_requests = [r for r in pending_requests if str(r.get('requested_by_id')) != str(manual_user_id)]
             
-            html += """
+            num_pending = len(pending_requests)
+            html += f"""
         <div class="list-section">
-            <h2>⏳ Open Requests ({len(pending_requests)} pending)</h2>
+            <h2>⏳ Open Requests ({num_pending} pending)</h2>
 """
             
             # Manual approval requests
@@ -824,11 +909,12 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         except Exception as e:
             logger.warning(f"Failed to load open requests: {e}")
     
-    html += """
+    num_lists = len(list_breakdown)
+    html += f"""
         
         <!-- Per-List Breakdown -->
         <div class="list-section">
-            <h2>📋 List Breakdown ({len(list_breakdown)} lists)</h2>
+            <h2>📋 List Breakdown ({num_lists} lists)</h2>
 """
     
     # Check if we have list data
