@@ -9,7 +9,11 @@ from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
 
-from ..database import get_list_items, get_newcomers, get_removals, get_repeated_failures, get_list_staleness
+from ..database import (
+    get_list_items, get_newcomers, get_removals, 
+    get_repeated_failures, get_list_staleness,
+    get_storage_estimate, get_list_activity_patterns, get_blocking_impact_stats
+)
 
 logger = logging.getLogger(__name__)
 
