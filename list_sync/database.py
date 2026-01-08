@@ -951,6 +951,136 @@ def get_removals(days: int = 7) -> List[Dict[str, Any]]:
         return results
 
 
+def get_repeated_failures(min_attempts: int = 3) -> List[Dict[str, Any]]:
+    """Get items that have failed multiple times."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT title, year, tmdb_id, status 
+            FROM synced_items 
+            WHERE status IN ('request_failed', 'error', 'not_found')
+            ORDER BY last_synced DESC
+            LIMIT 50
+        ''')
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'title': row[0],
+                'year': row[1],
+                'tmdb_id': row[2],
+                'status': row[3]
+            })
+        return results
+
+
+def get_list_staleness() -> List[Dict[str, Any]]:
+    """Get lists that haven't been updated recently."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT l.list_type, l.list_id, l.last_synced,
+                   julianday('now') - julianday(l.last_synced) as days_since_sync,
+                   l.item_count
+            FROM lists l
+            WHERE l.last_synced IS NOT NULL
+            AND julianday('now') - julianday(l.last_synced) > 7
+            ORDER BY days_since_sync DESC
+            LIMIT 10
+        ''')
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'list_type': row[0],
+                'list_id': row[1],
+                'last_synced': row[2],
+                'days_since_sync': int(row[3]),
+                'item_count': row[4]
+            })
+        return results
+
+
+def get_storage_estimate() -> Dict[str, Any]:
+    """Estimate storage needed for pending downloads."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT media_type, COUNT(*) 
+            FROM synced_items 
+            WHERE status IN ('already_requested', 'requested')
+            GROUP BY media_type
+        ''')
+        
+        pending_by_type = {row[0]: row[1] for row in cursor.fetchall()}
+        movie_avg_gb = 8
+        tv_season_avg_gb = 15
+        movies = pending_by_type.get('movie', 0)
+        tv_shows = pending_by_type.get('tv', 0)
+        movie_storage = movies * movie_avg_gb
+        tv_storage = tv_shows * tv_season_avg_gb * 3
+        total_gb = movie_storage + tv_storage
+        
+        return {
+            'total_gb': total_gb,
+            'total_tb': round(total_gb / 1024, 2),
+            'movies_gb': movie_storage,
+            'tv_gb': tv_storage,
+            'pending_movies': movies,
+            'pending_tv': tv_shows
+        }
+
+
+def get_list_activity_patterns(days: int = 30) -> List[Dict[str, Any]]:
+    """Analyze list activity patterns."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT list_type, list_id, COUNT(*) as additions
+            FROM list_changes
+            WHERE change_type = 'added'
+            AND datetime(changed_at) >= datetime('now', '-' || ? || ' days')
+            GROUP BY list_type, list_id
+            ORDER BY additions DESC
+        ''', (days,))
+        
+        activity = []
+        for row in cursor.fetchall():
+            additions_per_day = row[2] / days if days > 0 else 0
+            activity.append({
+                'list_type': row[0],
+                'list_id': row[1],
+                'additions': row[2],
+                'avg_per_day': round(additions_per_day, 1)
+            })
+        return activity
+
+
+def get_blocking_impact_stats(days: int = 7) -> Dict[str, Any]:
+    """Get statistics about blocking filters."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM synced_items WHERE status = \"blocked\"')
+        total_blocked = cursor.fetchone()[0] or 0
+        
+        cursor.execute('''
+            SELECT title, year
+            FROM synced_items 
+            WHERE status = 'blocked'
+            AND datetime(last_synced) >= datetime('now', '-' || ? || ' days')
+            ORDER BY last_synced DESC
+            LIMIT 10
+        ''', (days,))
+        
+        recent_blocks = [{'title': row[0], 'year': row[1]} for row in cursor.fetchall()]
+        
+        return {
+            'total_blocked': total_blocked,
+            'recent_blocked_count': len(recent_blocks),
+            'recent_blocks': recent_blocks
+        }
+
+
 def clear_all_lists():
     """Clear all lists from the database."""
     with sqlite3.connect(DB_FILE) as conn:
