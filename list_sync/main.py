@@ -1545,7 +1545,7 @@ def run_sync(
                 logging.info("Attempting to generate email report...")
                 from .reports.report_generator import send_sync_report
                 logging.info("Email report module imported successfully")
-                send_sync_report(sync_results, synced_lists)
+                send_sync_report(sync_results, synced_lists, overseerr_client)
                 logging.info("Email report sent/saved successfully")
             except Exception as e:
                 logging.error(f"Failed to send email report: {e}", exc_info=True)

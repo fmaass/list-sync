@@ -334,6 +334,48 @@ class OverseerrClient:
             logging.error(f"Error confirming status for {media_type} ID {media_id}: {str(e)}")
             raise
     
+    def get_pending_requests(self, limit: int = 100) -> list:
+        """
+        Get all pending requests (waiting for approval).
+        
+        Args:
+            limit: Maximum number of requests to return (default: 100)
+            
+        Returns:
+            List of pending request dictionaries with title, year, requestedBy info
+        """
+        try:
+            # Query requests endpoint
+            # filter=pending will get requests with status=1 (REQUESTED/pending approval)
+            requests_url = f"{self.overseerr_url}/api/v1/request?take={limit}&filter=pending&sort=added"
+            response = requests.get(requests_url, headers=self.headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            pending_requests = []
+            for req in data.get('results', []):
+                media = req.get('media', {})
+                requested_by = req.get('requestedBy', {})
+                
+                pending_requests.append({
+                    'id': req.get('id'),
+                    'title': media.get('title') or media.get('name', 'Unknown'),
+                    'year': media.get('releaseDate', '')[:4] if media.get('releaseDate') else None,
+                    'media_type': req.get('type', 'movie'),
+                    'tmdb_id': media.get('tmdbId'),
+                    'status': req.get('status'),  # 1 = pending approval
+                    'requested_by_id': requested_by.get('id'),
+                    'requested_by_name': requested_by.get('displayName', 'Unknown'),
+                    'created_at': req.get('createdAt')
+                })
+            
+            logging.info(f"Found {len(pending_requests)} pending requests in Overseerr")
+            return pending_requests
+            
+        except Exception as e:
+            logging.error(f"Failed to get pending requests: {e}")
+            return []
+    
     def extract_number_of_seasons(self, media_data):
         """
         Extract the number of seasons from media data.

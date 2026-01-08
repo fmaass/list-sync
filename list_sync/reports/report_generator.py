@@ -14,7 +14,7 @@ from ..database import get_list_items, get_newcomers, get_removals
 logger = logging.getLogger(__name__)
 
 
-def generate_html_report(sync_results, synced_lists, max_items_per_category: int = 5, overseerr_url: str = None) -> str:
+def generate_html_report(sync_results, synced_lists, max_items_per_category: int = 5, overseerr_url: str = None, overseerr_client = None) -> str:
     """
     Generate HTML email report
     
@@ -23,6 +23,7 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
         synced_lists: List of synced list info
         max_items_per_category: Maximum items to show per category (default: 5 for email, use 999 for attachment)
         overseerr_url: Optional Overseerr URL for generating links to manage movies
+        overseerr_client: Optional OverseerrClient for querying pending requests
         
     Returns:
         str: HTML content
@@ -167,12 +168,12 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
     # Sort by coverage (worst first), but put unsynced lists at the end
     list_breakdown.sort(key=lambda x: (x.get('not_synced', False), x['coverage_pct']))
     
-    # Generate HTML with specified max_items limit and optional Seerr links
-    html = _generate_html(sync_results, list_breakdown, max_items_per_category, overseerr_url)
+    # Generate HTML with specified max_items limit, Seerr links, and client
+    html = _generate_html(sync_results, list_breakdown, max_items_per_category, overseerr_url, overseerr_client)
     return html
 
 
-def generate_full_html_report(sync_results, synced_lists, overseerr_url: str = None) -> str:
+def generate_full_html_report(sync_results, synced_lists, overseerr_url: str = None, overseerr_client = None) -> str:
     """
     Generate FULL HTML report with ALL missing items (for HTML attachment).
     Same as generate_html_report but shows ALL items with links to Seerr.
@@ -186,8 +187,8 @@ def generate_full_html_report(sync_results, synced_lists, overseerr_url: str = N
         str: Complete HTML with all items and Seerr links
     """
     # Generate report with no item limit (show all items)
-    # Pass overseerr_url for link generation
-    return generate_html_report(sync_results, synced_lists, max_items_per_category=999, overseerr_url=overseerr_url)
+    # Pass overseerr_url and client for link generation and pending requests
+    return generate_html_report(sync_results, synced_lists, max_items_per_category=999, overseerr_url=overseerr_url, overseerr_client=overseerr_client)
 
 
 def generate_pdf_report(sync_results, synced_lists) -> bytes:
@@ -343,7 +344,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5, over
     return html
 
 
-def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_category: int = 5, overseerr_url: str = None) -> str:
+def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_category: int = 5, overseerr_url: str = None, overseerr_client = None) -> str:
     """
     Generate HTML content
     
@@ -717,6 +718,112 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         </div>
 """
     
+    # Current Open Requests (pending manual approval)
+    if overseerr_client:
+        try:
+            pending_requests = overseerr_client.get_pending_requests(limit=50)
+            
+            # Get manual approval user ID
+            manual_user_id = os.getenv('MANUAL_APPROVAL_USER_ID', '2')
+            
+            # Separate auto vs manual requests
+            manual_requests = [r for r in pending_requests if str(r.get('requested_by_id')) == str(manual_user_id)]
+            auto_requests = [r for r in pending_requests if str(r.get('requested_by_id')) != str(manual_user_id)]
+            
+            html += """
+        <div class="list-section">
+            <h2>⏳ Open Requests ({len(pending_requests)} pending)</h2>
+"""
+            
+            # Manual approval requests
+            if manual_requests:
+                html += f"""
+            <div style="background: #3a2a1a; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                <h3 style="margin-top: 0; color: #fbbf24;">🙋 Awaiting Manual Approval ({len(manual_requests)} movies)</h3>
+                <p style="opacity: 0.7; margin-bottom: 15px;">From lists configured for manual review</p>
+                <ul style="list-style: none; padding: 0; margin: 0;">
+"""
+                for item in manual_requests[:max_items_per_category]:
+                    title = item.get('title', 'Unknown')
+                    year_str = f" ({item['year']})" if item.get('year') else ""
+                    requester = item.get('requested_by_name', 'Unknown')
+                    
+                    # Add Seerr link to request page
+                    tmdb_id = item.get('tmdb_id')
+                    req_id = item.get('id')
+                    if overseerr_url and req_id:
+                        seerr_link = f"{overseerr_url.rstrip('/')}/requests?filter=pending"
+                        title_html = f"<a href='{seerr_link}' target='_blank' style='color: #fbbf24; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                    else:
+                        title_html = f"{title}{year_str}"
+                    
+                    html += f"""
+                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        {title_html}
+                        <span style="opacity: 0.5; font-size: 12px; margin-left: 10px;">by {requester}</span>
+                    </li>
+"""
+                
+                if len(manual_requests) > max_items_per_category:
+                    remaining = len(manual_requests) - max_items_per_category
+                    html += f"""
+                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more awaiting approval</li>
+"""
+                
+                html += """
+                </ul>
+            </div>
+"""
+            
+            # Auto-approved requests (pending download)
+            if auto_requests:
+                html += f"""
+            <div style="background: #1a2a3a; padding: 20px; border-radius: 8px;">
+                <h3 style="margin-top: 0; color: #60a5fa;">⏬ Auto-Approved, Awaiting Download ({len(auto_requests)} movies)</h3>
+                <p style="opacity: 0.7; margin-bottom: 15px;">Approved but not yet downloaded</p>
+                <ul style="list-style: none; padding: 0; margin: 0;">
+"""
+                for item in auto_requests[:max_items_per_category]:
+                    title = item.get('title', 'Unknown')
+                    year_str = f" ({item['year']})" if item.get('year') else ""
+                    
+                    # Add Seerr link
+                    if overseerr_url:
+                        seerr_link = f"{overseerr_url.rstrip('/')}/requests?filter=pending"
+                        title_html = f"<a href='{seerr_link}' target='_blank' style='color: #60a5fa; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                    else:
+                        title_html = f"{title}{year_str}"
+                    
+                    html += f"""
+                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        {title_html}
+                    </li>
+"""
+                
+                if len(auto_requests) > max_items_per_category:
+                    remaining = len(auto_requests) - max_items_per_category
+                    html += f"""
+                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more pending download</li>
+"""
+                
+                html += """
+                </ul>
+            </div>
+"""
+            
+            if not manual_requests and not auto_requests:
+                html += """
+            <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
+                <p style="margin: 0;">✅ No open requests! Everything is either approved or in your library.</p>
+            </div>
+"""
+            
+            html += """
+        </div>
+"""
+        except Exception as e:
+            logger.warning(f"Failed to load open requests: {e}")
+    
     html += """
         
         <!-- Per-List Breakdown -->
@@ -833,13 +940,14 @@ def _should_send_report() -> bool:
         return True
 
 
-def send_sync_report(sync_results, synced_lists):
+def send_sync_report(sync_results, synced_lists, overseerr_client=None):
     """
     Generate and send sync report
     
     Args:
         sync_results: SyncResults object
         synced_lists: List of synced list info
+        overseerr_client: Optional OverseerrClient for querying pending requests
     """
     logger.info("send_sync_report() called")
     
@@ -861,13 +969,13 @@ def send_sync_report(sync_results, synced_lists):
         overseerr_url = os.getenv('OVERSEERR_URL', '')
         
         logger.info("Generating HTML report...")
-        # Generate HTML (with 5 items per category for email body, no links)
-        html = generate_html_report(sync_results, synced_lists, max_items_per_category=5)
+        # Generate HTML (with 5 items per category for email body, with client for pending requests)
+        html = generate_html_report(sync_results, synced_lists, max_items_per_category=5, overseerr_url=overseerr_url, overseerr_client=overseerr_client)
         logger.info(f"Email HTML generated: {len(html)} bytes")
         
-        # Generate FULL HTML attachment (with ALL items and Seerr links)
+        # Generate FULL HTML attachment (with ALL items, Seerr links, and pending requests)
         logger.info("Generating complete HTML attachment...")
-        full_html = generate_full_html_report(sync_results, synced_lists, overseerr_url)
+        full_html = generate_full_html_report(sync_results, synced_lists, overseerr_url, overseerr_client)
         full_html_bytes = full_html.encode('utf-8')
         logger.info(f"Attachment HTML generated: {len(full_html_bytes)} bytes ({len(full_html_bytes)/1024:.1f} KB)")
         
