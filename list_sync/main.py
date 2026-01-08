@@ -1046,7 +1046,11 @@ def automated_sync(
     
     # Start daily report scheduler (independent of sync timing)
     if os.getenv('EMAIL_REPORT_ENABLED', 'false').lower() == 'true':
+        logging.info("🔍 EMAIL_REPORT_ENABLED=true, starting daily report scheduler...")
+        print("🔍 EMAIL_REPORT_ENABLED=true, starting daily report scheduler...")
         schedule_daily_report(overseerr_client)
+        logging.info("✅ Daily report scheduler initialized")
+        print("✅ Daily report scheduler initialized")
     
     # Current interval - will be updated from database
     current_interval_hours = initial_interval_hours
