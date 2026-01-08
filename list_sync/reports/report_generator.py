@@ -406,7 +406,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     duration_mins = int(sync_results.start_time // 60) if hasattr(sync_results, 'start_time') else 0
     duration_secs = int(sync_results.start_time % 60) if hasattr(sync_results, 'start_time') else 0
     
-    # Build HTML
+    # Build HTML (CRITICAL: must be f-string for variable interpolation)
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -655,18 +655,18 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
 """
     
     if action_items:
-        html += """
+        html += f"""
             <ul style="margin: 15px 0 0 0; padding-left: 20px; opacity: 0.9;">
 """
         for item in action_items:
             html += f"""
                 <li>{item}</li>
 """
-        html += """
+        html += f"""
             </ul>
 """
     
-    html += """
+    html += f"""
         </div>
         
         <!-- Overview -->
@@ -713,7 +713,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         removals = get_removals(days=7)
         
         # Always show the section, even if empty (so user knows tracking is working)
-        html += """
+        html += f"""
         <div class="list-section">
             <h2>📈 List Changes (Last 7 Days)</h2>
 """
@@ -753,7 +753,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more newcomers</li>
 """
                 
-                html += """
+                html += f"""
                 </ul>
             </div>
 """
@@ -784,24 +784,24 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more removals</li>
 """
                 
-                html += """
+                html += f"""
                 </ul>
             </div>
 """
         else:
             # Show message when no changes
-            html += """
+            html += f"""
             <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
                 <p style="margin: 0;">No list changes in the last 7 days. Changes will appear here after the next sync completes.</p>
             </div>
 """
         
-        html += """
+        html += f"""
         </div>
 """
     except Exception as e:
         logger.warning(f"Failed to load newcomers/removals: {e}")
-        html += """
+        html += f"""
         <div class="list-section">
             <h2>📈 List Changes (Last 7 Days)</h2>
             <div style="background: #3a1a1a; padding: 20px; border-radius: 8px; text-align: center;">
@@ -863,7 +863,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more awaiting approval</li>
 """
                 
-                html += """
+                html += f"""
                 </ul>
             </div>
 """
@@ -899,19 +899,19 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more pending download</li>
 """
                 
-                html += """
+                html += f"""
                 </ul>
             </div>
 """
             
             if not manual_requests and not auto_requests:
-                html += """
+                html += f"""
             <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
                 <p style="margin: 0;">✅ No open requests! Everything is either approved or in your library.</p>
             </div>
 """
             
-            html += """
+            html += f"""
         </div>
 """
         except Exception as e:
@@ -924,7 +924,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         blocking_stats = get_blocking_impact_stats(days=7)
         stale_lists = get_list_staleness()
         
-        html += """
+        html += f"""
         <div class="list-section">
             <h2>💡 Insights</h2>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
@@ -963,7 +963,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                 </div>
 """
         
-        html += """
+        html += f"""
             </div>
         </div>
 """
@@ -980,13 +980,13 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     
     # Check if we have list data
     if len(list_breakdown) == 0:
-        html += """
+        html += f"""
             <div style="background: #2a2a2a; padding: 30px; border-radius: 8px; text-align: center; opacity: 0.7;">
                 <p style="margin: 0;">No per-list data available yet. List breakdown will appear after the first sync completes.</p>
             </div>
 """
     else:
-        html += """
+        html += f"""
             <p style="opacity: 0.7; margin-bottom: 20px;">Sorted by coverage (lowest first)</p>
 """
     
@@ -1028,7 +1028,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             </div>
 """
     
-    html += """
+    html += f"""
         </div>
         
         <!-- Footer -->
