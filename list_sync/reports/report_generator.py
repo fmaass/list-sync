@@ -678,20 +678,24 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     <div class="stat-label">Approved & Downloading</div>
                     <div class="stat-number">{pending}</div>
                     <div class="stat-pct">{pending_pct:.1f}%</div>
+                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Already approved, waiting for download</div>
                 </div>
                 <div class="stat-card danger">
                     <div class="stat-label">Blocked</div>
                     <div class="stat-number">{blocked}</div>
                     <div class="stat-pct">{blocked_pct:.1f}%</div>
+                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Filtered by blocklist</div>
                 </div>
                 <div class="stat-card danger">
                     <div class="stat-label">Request Failed</div>
                     <div class="stat-number">{request_failed}</div>
                     <div class="stat-pct">{request_failed_pct:.1f}%</div>
+                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Unable to request</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Not Found</div>
                     <div class="stat-number">{not_found}</div>
+                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Not in Overseerr</div>
                 </div>
             </div>
         </div>
@@ -908,6 +912,59 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
 """
         except Exception as e:
             logger.warning(f"Failed to load open requests: {e}")
+    
+    # Add insights section (Phase 2 & 3)
+    try:
+        storage_est = get_storage_estimate()
+        list_activity = get_list_activity_patterns(days=30)
+        blocking_stats = get_blocking_impact_stats(days=7)
+        stale_lists = get_list_staleness()
+        
+        html += """
+        <div class="list-section">
+            <h2>💡 Insights</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+"""
+        
+        # Storage prediction
+        if storage_est and storage_est.get('total_gb', 0) > 0:
+            storage_tb = storage_est.get('total_tb', 0)
+            storage_icon = "💾" if storage_tb < 1 else "🗄️"
+            html += f"""
+                <div style="background: #1a2a3a; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 24px;">{storage_icon}</div>
+                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{storage_tb} TB</div>
+                    <div style="opacity: 0.7; font-size: 12px;">Storage needed for {storage_est.get('pending_movies', 0)} pending movies</div>
+                </div>
+"""
+        
+        # Blocking impact
+        if blocking_stats and blocking_stats.get('total_blocked', 0) > 0:
+            html += f"""
+                <div style="background: #3a1a1a; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 24px;">⛔</div>
+                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{blocking_stats['total_blocked']}</div>
+                    <div style="opacity: 0.7; font-size: 12px;">Items blocked (saved from junk)</div>
+                </div>
+"""
+        
+        # Most active list
+        if list_activity and len(list_activity) > 0:
+            top_list = list_activity[0]
+            html += f"""
+                <div style="background: #1a3a2a; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 24px;">📈</div>
+                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{top_list['avg_per_day']}/day</div>
+                    <div style="opacity: 0.7; font-size: 12px;">Most active: {top_list['list_type']}/{top_list['list_id'][:10]}...</div>
+                </div>
+"""
+        
+        html += """
+            </div>
+        </div>
+"""
+    except Exception as e:
+        logger.warning(f"Failed to generate insights: {e}")
     
     num_lists = len(list_breakdown)
     html += f"""
