@@ -1316,15 +1316,12 @@ def automated_sync(
             # Use run_sync() for full syncs to leverage existing tracking and logic
             logging.info("Starting full sync operation")
             
-            # Use run_sync() which handles tracking automatically
-            from list_sync.config import load_env_config
-            overseerr_url, overseerr_api_key, user_id, _, _, is_4k_env = load_env_config()
-            overseerr_client_temp = OverseerrClient(overseerr_url, overseerr_api_key, user_id)
-            
+            # Use the already-configured overseerr_client passed to perform_sync
+            # No need to reload config - we already have a working client
             run_sync(
-                overseerr_client_temp,
+                overseerr_client,
                 dry_run=False,
-                is_4k=is_4k_env or is_4k,
+                is_4k=is_4k,
                 automated_mode=automated_mode
             )
             
