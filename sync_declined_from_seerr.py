@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sync declined requests from Seerr to local database.
-This should be run periodically to detect movies that were declined in Seerr.
+This should be run periodically (or before each sync) to detect movies that were declined in Seerr.
 """
 import os
 import sys
@@ -19,14 +19,8 @@ logger = logging.getLogger(__name__)
 
 def sync_declined_requests():
     """
-    Check Seerr for declined requests and mark them in local database.
-    
-    In Seerr, when a request is declined, it's removed from the requests list.
-    We need to compare our database against Seerr to find what's missing.
-    
-    Note: This is a basic implementation. A more robust solution would:
-    1. Use Seerr webhooks to get real-time decline notifications
-    2. Store request IDs to track lifecycle
+    Check Seerr for declined requests (status=3) and mark them in local database.
+    This prevents re-requesting movies that were manually declined.
     """
     # Load config
     overseerr_url = os.getenv('OVERSEERR_URL')
@@ -36,19 +30,44 @@ def sync_declined_requests():
         config = load_env_config()
         if not config or not config[0] or not config[1]:
             logger.error("Overseerr not configured")
-            return
+            return 0
         overseerr_url, api_key = config[0], config[1]
     
     client = OverseerrClient(overseerr_url, api_key)
     
-    # TODO: Implement declined request detection
-    # This requires either:
-    # 1. Seerr webhook integration (preferred)
-    # 2. Tracking request IDs and checking if they disappeared
-    # 3. Manual API endpoint if Seerr provides one
+    # Get declined requests from Seerr (status=3)
+    logger.info("Fetching declined requests from Seerr...")
+    declined_requests = client.get_declined_requests(limit=500)
     
-    logger.info("Declined request sync not yet implemented")
-    logger.info("For now, use the web UI to manage declined requests")
+    if not declined_requests:
+        logger.info("No declined requests found in Seerr")
+        return 0
+    
+    logger.info(f"Found {len(declined_requests)} declined requests in Seerr")
+    
+    # Mark them in local database
+    new_count = 0
+    for req in declined_requests:
+        tmdb_id = req.get('tmdb_id')
+        if not tmdb_id:
+            continue
+        
+        # Check if already marked
+        if not is_request_declined(str(tmdb_id), req.get('media_type', 'movie')):
+            mark_request_declined(
+                tmdb_id=str(tmdb_id),
+                media_type=req.get('media_type', 'movie'),
+                title=req.get('title'),
+                year=req.get('year'),
+                declined_by_user_id=req.get('requested_by_id'),
+                reason='Declined in Seerr'
+            )
+            new_count += 1
+            logger.info(f"  Marked as declined: {req.get('title')} ({req.get('year')})")
+    
+    logger.info(f"✅ Synced {new_count} new declined requests to database")
+    return new_count
 
 if __name__ == '__main__':
-    sync_declined_requests()
+    count = sync_declined_requests()
+    sys.exit(0 if count >= 0 else 1)

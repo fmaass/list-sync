@@ -376,6 +376,51 @@ class OverseerrClient:
             logging.error(f"Failed to get pending requests: {e}")
             return []
     
+    def get_declined_requests(self, limit: int = 500) -> list:
+        """
+        Get all declined requests from Seerr.
+        
+        Args:
+            limit: Maximum number of requests to return (default: 500)
+            
+        Returns:
+            List of declined request dictionaries with title, year, TMDB ID
+        """
+        try:
+            # Get all requests and filter for status=3 (DECLINED)
+            requests_url = f"{self.overseerr_url}/api/v1/request?take={limit}"
+            response = requests.get(requests_url, headers=self.headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            declined_requests = []
+            for req in data.get('results', []):
+                # Status 3 = DECLINED
+                if req.get('status') != 3:
+                    continue
+                    
+                media = req.get('media', {})
+                requested_by = req.get('requestedBy', {})
+                
+                declined_requests.append({
+                    'id': req.get('id'),
+                    'title': media.get('title') or media.get('name', 'Unknown'),
+                    'year': media.get('releaseDate', '')[:4] if media.get('releaseDate') else None,
+                    'media_type': req.get('type', 'movie'),
+                    'tmdb_id': media.get('tmdbId'),
+                    'status': req.get('status'),  # 3 = declined
+                    'requested_by_id': requested_by.get('id'),
+                    'requested_by_name': requested_by.get('displayName', 'Unknown'),
+                    'created_at': req.get('createdAt')
+                })
+            
+            logging.info(f"Found {len(declined_requests)} declined requests in Overseerr")
+            return declined_requests
+            
+        except Exception as e:
+            logging.error(f"Failed to get declined requests: {e}")
+            return []
+    
     def extract_number_of_seasons(self, media_data):
         """
         Extract the number of seasons from media data.
