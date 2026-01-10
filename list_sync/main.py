@@ -660,6 +660,25 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
             
             logging.info(f"📊 MATCH SUMMARY: Method={match_method}, Overseerr_ID={overseerr_id}")
             
+            # BLOCKLIST CHECK #2: Check blocklist with resolved ID if we didn't have tmdb_id initially
+            # overseerr_id IS the TMDB ID for movies in Seerr
+            if not tmdb_id and media_type == 'movie':
+                tmdb_id = overseerr_id  # Update tmdb_id for database storage
+                from .blocklist import is_blocked
+                try:
+                    if is_blocked(overseerr_id, media_type):
+                        logging.info(f"⛔ BLOCKED: '{title}' (TMDB: {overseerr_id}) - on blocklist (detected after ID resolution), skipping")
+                        # Get list information from item using helper function
+                        source_lists = get_source_lists_from_item(item, list_type, list_id)
+                        # Save to database as "blocked"
+                        for source_list in source_lists:
+                            save_sync_result(title, media_type, imdb_id, overseerr_id, 
+                                           "blocked", year, overseerr_id, 
+                                           source_list['type'], source_list['id'])
+                        return {"title": title, "status": "blocked", "year": year, "media_type": media_type}
+                except Exception as e:
+                    logging.warning(f"Blocklist check failed: {e}")
+            
             # Get list information from item using helper function
             source_lists = get_source_lists_from_item(item, list_type, list_id)
             
