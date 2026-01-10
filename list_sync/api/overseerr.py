@@ -22,7 +22,10 @@ class OverseerrClient:
             api_key (str): API key
             requester_user_id (str, optional): Requester user ID. Defaults to "1".
         """
-        self.overseerr_url = overseerr_url.rstrip('/')
+        if not overseerr_url or not api_key:
+            raise ValueError("overseerr_url and api_key are required")
+        
+        self.overseerr_url = overseerr_url.rstrip('/') if overseerr_url else ''
         self.api_key = api_key
         self.requester_user_id = requester_user_id
         self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}

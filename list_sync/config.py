@@ -526,23 +526,35 @@ class ConfigManager:
                     value = self.encryption.decrypt_value(value)
                 except Exception as e:
                     logging.error(f"Failed to decrypt setting {key}: {e}")
-                    value = ""
+                    # For critical settings, try environment variable fallback
+                    if key in ['overseerr_url', 'overseerr_api_key']:
+                        env_val = os.getenv(key.upper())
+                        if env_val:
+                            logging.info(f"Using environment variable for {key} due to decryption failure")
+                            value = env_val
+                        else:
+                            value = None
+                    else:
+                        value = None
             
-            # Convert type
-            if setting_type == 'boolean':
-                value = value.lower() in ('true', '1', 'yes')
-            elif setting_type == 'integer':
-                try:
-                    value = int(value)
-                except:
-                    value = 0
-            elif setting_type == 'float':
-                try:
-                    value = float(value)
-                except:
-                    value = 0.0
+            # Convert type (only if value is not None)
+            if value is not None:
+                if setting_type == 'boolean':
+                    value = str(value).lower() in ('true', '1', 'yes')
+                elif setting_type == 'integer':
+                    try:
+                        value = int(value)
+                    except:
+                        value = 0
+                elif setting_type == 'float':
+                    try:
+                        value = float(value)
+                    except:
+                        value = 0.0
             
-            self._cache[key] = value
+            # Only cache non-None values
+            if value is not None:
+                self._cache[key] = value
     
     def get_setting(self, key: str, default: any = None) -> any:
         """
