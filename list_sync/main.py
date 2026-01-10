@@ -1120,6 +1120,30 @@ def automated_sync(
             logging.warning("⚠️ Cancellation detected before sync started")
             return False
         
+        # Sync declined requests from Seerr before processing new requests
+        try:
+            logging.info("🔄 Syncing declined requests from Seerr...")
+            declined_count = overseerr_client.get_declined_requests(limit=500)
+            if declined_count:
+                from .database import mark_request_declined, is_request_declined
+                new_declined = 0
+                for req in declined_count:
+                    tmdb_id = req.get('tmdb_id')
+                    if tmdb_id and not is_request_declined(str(tmdb_id), req.get('media_type', 'movie')):
+                        mark_request_declined(
+                            tmdb_id=str(tmdb_id),
+                            media_type=req.get('media_type', 'movie'),
+                            title=req.get('title'),
+                            year=req.get('year'),
+                            declined_by_user_id=str(req.get('requested_by_id', '')),
+                            reason='Declined in Seerr'
+                        )
+                        new_declined += 1
+                if new_declined > 0:
+                    logging.info(f"✅ Marked {new_declined} new declined requests from Seerr")
+        except Exception as e:
+            logging.warning(f"Failed to sync declined requests (non-critical): {e}")
+        
         try:
             # Check for single list sync request files (both legacy and queued)
             # Skip this check if force_full_sync is True (e.g., on startup)
