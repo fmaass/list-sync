@@ -135,15 +135,17 @@ class ManualApprovalCleanup:
                 list_id = lst['id']
                 
                 # Query the item_lists junction table to find all items in this list
+                # Try using overseerr_id if tmdb_id is not populated
                 cursor.execute("""
-                    SELECT DISTINCT si.tmdb_id
+                    SELECT DISTINCT 
+                        COALESCE(si.tmdb_id, CAST(si.overseerr_id AS TEXT)) as id
                     FROM synced_items si
                     INNER JOIN item_lists il ON si.id = il.item_id
                     WHERE il.list_type = ? 
                       AND il.list_id = ?
                       AND si.media_type = 'movie'
-                      AND si.tmdb_id IS NOT NULL
-                      AND si.tmdb_id != ''
+                      AND (si.tmdb_id IS NOT NULL OR si.overseerr_id IS NOT NULL)
+                      AND COALESCE(si.tmdb_id, CAST(si.overseerr_id AS TEXT)) != ''
                 """, (list_type, list_id))
                 
                 for row in cursor.fetchall():
@@ -160,26 +162,30 @@ class ManualApprovalCleanup:
         Get movie details from the database.
         
         Args:
-            tmdb_id: TMDB ID
+            tmdb_id: TMDB ID (or overseerr_id which is the same)
             
         Returns:
             Dict with movie details or None
         """
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
+            # Try both tmdb_id and overseerr_id (they're the same in Seerr)
             cursor.execute("""
-                SELECT title, year, tmdb_id, status
+                SELECT title, year, 
+                       COALESCE(tmdb_id, CAST(overseerr_id AS TEXT)) as id,
+                       status
                 FROM synced_items
-                WHERE tmdb_id = ? AND media_type = 'movie'
+                WHERE (tmdb_id = ? OR overseerr_id = ?) 
+                  AND media_type = 'movie'
                 LIMIT 1
-            """, (str(tmdb_id),))
+            """, (str(tmdb_id), tmdb_id))
             
             row = cursor.fetchone()
             if row:
                 return {
                     'title': row[0],
                     'year': row[1],
-                    'tmdb_id': int(row[2]),
+                    'tmdb_id': int(row[2]) if row[2] else tmdb_id,
                     'db_status': row[3]
                 }
         
