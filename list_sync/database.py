@@ -448,6 +448,28 @@ def init_database():
             # Indexes might already exist
             pass
         
+        # Declined requests table - tracks manually declined requests to prevent re-requesting
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS declined_requests (
+                tmdb_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                title TEXT,
+                year INTEGER,
+                declined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                declined_by_user_id TEXT,
+                reason TEXT,
+                PRIMARY KEY (tmdb_id, media_type)
+            )
+        ''')
+        
+        # Create index for faster lookups
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_declined_requests_tmdb ON declined_requests(tmdb_id, media_type)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_declined_requests_date ON declined_requests(declined_at)')
+        except sqlite3.OperationalError:
+            # Indexes might already exist
+            pass
+        
         conn.commit()
     
     # Migrate existing lists to populate URLs and add item_count column
@@ -2105,3 +2127,109 @@ def get_cached_image_stats() -> Dict[str, Any]:
             'oldest_image': oldest,
             'newest_image': newest
         }
+
+
+# ============================================================================
+# Declined Requests Management
+# ============================================================================
+
+def is_request_declined(tmdb_id: str, media_type: str = 'movie') -> bool:
+    """
+    Check if a request has been manually declined.
+    
+    Args:
+        tmdb_id: TMDB ID of the media
+        media_type: Type of media (movie or tv)
+    
+    Returns:
+        bool: True if declined, False otherwise
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM declined_requests WHERE tmdb_id = ? AND media_type = ?",
+            (str(tmdb_id), media_type)
+        )
+        return cursor.fetchone() is not None
+
+
+def mark_request_declined(
+    tmdb_id: str,
+    media_type: str = 'movie',
+    title: Optional[str] = None,
+    year: Optional[int] = None,
+    declined_by_user_id: Optional[str] = None,
+    reason: Optional[str] = None
+):
+    """
+    Mark a request as declined to prevent future re-requesting.
+    
+    Args:
+        tmdb_id: TMDB ID of the media
+        media_type: Type of media (movie or tv)
+        title: Title of the media
+        year: Release year
+        declined_by_user_id: User who declined the request
+        reason: Optional reason for declining
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO declined_requests 
+            (tmdb_id, media_type, title, year, declined_by_user_id, reason, declined_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (str(tmdb_id), media_type, title, year, declined_by_user_id, reason))
+        conn.commit()
+        logging.info(f"Marked {title} ({year}) as declined")
+
+
+def unmark_request_declined(tmdb_id: str, media_type: str = 'movie'):
+    """
+    Remove a movie from the declined list (allow re-requesting).
+    
+    Args:
+        tmdb_id: TMDB ID of the media
+        media_type: Type of media (movie or tv)
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM declined_requests WHERE tmdb_id = ? AND media_type = ?",
+            (str(tmdb_id), media_type)
+        )
+        conn.commit()
+        logging.info(f"Removed TMDB {tmdb_id} from declined list")
+
+
+def get_declined_requests(limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Get all declined requests.
+    
+    Args:
+        limit: Maximum number of results to return
+    
+    Returns:
+        List of declined request dictionaries
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT tmdb_id, media_type, title, year, declined_at, declined_by_user_id, reason
+            FROM declined_requests
+            ORDER BY declined_at DESC
+            LIMIT ?
+        ''', (limit,))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'tmdb_id': row[0],
+                'media_type': row[1],
+                'title': row[2],
+                'year': row[3],
+                'declined_at': row[4],
+                'declined_by_user_id': row[5],
+                'reason': row[6]
+            })
+        
+        return results

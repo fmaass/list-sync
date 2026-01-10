@@ -716,6 +716,14 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
                     save_sync_result(title, media_type, imdb_id, overseerr_id, "already_requested", year, tmdb_id, source_list['type'], source_list['id'])
                 return {"title": title, "status": "already_requested", "year": year, "media_type": media_type}
             else:
+                # Check if request was previously declined
+                from .database import is_request_declined
+                if tmdb_id and is_request_declined(str(tmdb_id), media_type):
+                    logging.info(f"🚫 STATUS: Previously declined - skipping")
+                    # Save relationship for all source lists
+                    for source_list in source_lists:
+                        save_sync_result(title, media_type, imdb_id, overseerr_id, "declined", year, tmdb_id, source_list['type'], source_list['id'])
+                    return {"title": title, "status": "declined", "year": year, "media_type": media_type}
                 logging.info(f"🚀 STATUS: Requesting media...")
                 if search_result["mediaType"] == 'tv':
                     # Check if a specific season is requested
