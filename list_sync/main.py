@@ -1079,42 +1079,6 @@ def automated_sync(
         logging.info("✅ Daily report scheduler initialized")
         print("✅ Daily report scheduler initialized")
     
-    # Start Radarr blacklist sync scheduler (runs every 6 hours)
-    def schedule_blacklist_sync():
-        """Schedule automatic Radarr blacklist syncing every 6 hours"""
-        import threading
-        import time
-        from .sync_radarr_blacklist import sync_radarr_blacklist
-        
-        def run_blacklist_sync_loop():
-            while True:
-                try:
-                    # Run blacklist sync
-                    logging.info("🔄 Running scheduled Radarr blacklist sync...")
-                    success = sync_radarr_blacklist()
-                    if success:
-                        logging.info("✅ Radarr blacklist sync completed")
-                    else:
-                        logging.warning("⚠️ Radarr blacklist sync skipped or failed")
-                    
-                    # Sleep for 6 hours
-                    time.sleep(6 * 3600)
-                    
-                except Exception as e:
-                    logging.error(f"Error in blacklist sync scheduler: {e}")
-                    time.sleep(3600)  # Wait 1 hour on error
-        
-        # Start scheduler thread
-        blacklist_thread = threading.Thread(target=run_blacklist_sync_loop, daemon=True, name="BlacklistSyncScheduler")
-        blacklist_thread.start()
-        logging.info("✅ Radarr blacklist sync scheduler started (runs every 6 hours)")
-    
-    # Start blacklist sync if Radarr API key is configured
-    if os.getenv('RADARR_API_KEY'):
-        schedule_blacklist_sync()
-    else:
-        logging.info("⚠️ RADARR_API_KEY not set - automatic blacklist sync disabled")
-    
     # Current interval - will be updated from database
     current_interval_hours = initial_interval_hours
     
@@ -1174,6 +1138,17 @@ def automated_sync(
         if check_cancellation_requested():
             logging.warning("⚠️ Cancellation detected before sync started")
             return False
+        
+        # Sync Radarr blacklist before processing (ensures latest exclusions)
+        try:
+            from .sync_radarr_blacklist import sync_radarr_blacklist
+            if os.getenv('RADARR_API_KEY'):
+                logging.info("🔄 Syncing Radarr blacklist...")
+                success = sync_radarr_blacklist()
+                if success:
+                    logging.info("✅ Radarr blacklist synced")
+        except Exception as e:
+            logging.warning(f"Failed to sync Radarr blacklist (non-critical): {e}")
         
         # Sync declined requests from Seerr before processing new requests
         try:
