@@ -45,7 +45,7 @@ class BlocklistManager:
         # Configuration
         self.blocklist_path = Path(
             blocklist_path or 
-            os.getenv('BLOCKLIST_FILE', 'data/blocklist.json')
+            os.getenv('BLOCKLIST_FILE', 'data/blacklist.json')  # Changed to blacklist.json to match Radarr sync script
         )
         self.enabled = (
             enabled if enabled is not None
