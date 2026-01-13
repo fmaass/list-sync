@@ -22,10 +22,11 @@ class OverseerrClient:
             api_key (str): API key
             requester_user_id (str, optional): Requester user ID. Defaults to "1".
         """
-        if not overseerr_url or not api_key:
+        # Only check if actually None/empty, not if passed from failed config load
+        if overseerr_url is None or api_key is None or overseerr_url == '' or api_key == '':
             raise ValueError("overseerr_url and api_key are required")
         
-        self.overseerr_url = overseerr_url.rstrip('/') if overseerr_url else ''
+        self.overseerr_url = overseerr_url.rstrip('/')
         self.api_key = api_key
         self.requester_user_id = requester_user_id
         self.headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
