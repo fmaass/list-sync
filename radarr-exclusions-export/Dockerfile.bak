@@ -19,7 +19,7 @@ RUN mkdir -p /data
 
 # Environment defaults
 ENV RADARR_URL=http://radarr:7878 \
-    OUTPUT_FILE=/data/blacklist.json \
+    OUTPUT_FILE=/data/blocklist.json \
     LOG_LEVEL=INFO
 
 # Run export script

@@ -15,9 +15,9 @@ echo ""
 
 # Test 1: Check blocklist file exists
 echo "Test 1: Checking blocklist file..."
-if ssh "$SATURN_HOST" "test -f /volume1/docker/listsync/data/blacklist.json"; then
+if ssh "$SATURN_HOST" "test -f /volume1/docker/listsync/data/blocklist.json"; then
     echo "  ✅ Blocklist file exists"
-    FILE_SIZE=$(ssh "$SATURN_HOST" "stat -f%z /volume1/docker/listsync/data/blacklist.json")
+    FILE_SIZE=$(ssh "$SATURN_HOST" "stat -f%z /volume1/docker/listsync/data/blocklist.json")
     echo "  File size: $FILE_SIZE bytes"
 else
     echo "  ❌ Blocklist file not found"
@@ -28,7 +28,7 @@ echo ""
 
 # Test 2: Check file is valid JSON
 echo "Test 2: Validating JSON format..."
-if ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blacklist.json | jq empty 2>/dev/null"; then
+if ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blocklist.json | jq empty 2>/dev/null"; then
     echo "  ✅ Valid JSON format"
 else
     echo "  ❌ Invalid JSON format"
@@ -38,9 +38,9 @@ echo ""
 
 # Test 3: Check blocklist content
 echo "Test 3: Checking blocklist content..."
-MOVIE_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blacklist.json | jq '.movies | length'")
-TV_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blacklist.json | jq '.tv | length'")
-TOTAL_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blacklist.json | jq '.total_count'")
+MOVIE_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blocklist.json | jq '.movies | length'")
+TV_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blocklist.json | jq '.tv | length'")
+TOTAL_COUNT=$(ssh "$SATURN_HOST" "cat /volume1/docker/listsync/data/blocklist.json | jq '.total_count'")
 
 echo "  Movies: $MOVIE_COUNT"
 echo "  TV Shows: $TV_COUNT"

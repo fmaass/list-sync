@@ -11,7 +11,7 @@ This module:
 
 Environment Variables:
     BLOCKLIST_ENABLED: Enable/disable blocklist (default: true)
-    BLOCKLIST_FILE: Path to blocklist JSON (default: data/blocklist.json)
+    BLOCKLIST_FILE: Path to blacklist JSON (default: data/blacklist.json)
     BLOCKLIST_RELOAD_HOURS: Hours before reloading (default: 24)
 """
 

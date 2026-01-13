@@ -18,7 +18,7 @@ Why Radarr instead of Seerr:
 Environment Variables:
     RADARR_URL: Radarr API base URL (e.g., http://radarr:7878)
     RADARR_API_KEY: Radarr API key
-    OUTPUT_FILE: Path to output JSON file (default: /data/blocklist.json)
+    OUTPUT_FILE: Path to output JSON file (default: /data/blacklist.json)
     LOG_LEVEL: Logging level (default: INFO)
 
 Usage:
@@ -38,7 +38,7 @@ import requests
 # Configuration from environment
 RADARR_URL = os.getenv("RADARR_URL", "http://radarr:7878")
 RADARR_API_KEY = os.getenv("RADARR_API_KEY")
-OUTPUT_FILE = os.getenv("OUTPUT_FILE", "/data/blocklist.json")
+OUTPUT_FILE = os.getenv("OUTPUT_FILE", "/data/blacklist.json")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Setup logging

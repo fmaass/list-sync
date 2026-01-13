@@ -32,7 +32,7 @@ This service connects to your Radarr instance and exports all import exclusions 
    cat > .env << 'EOF'
 RADARR_URL=http://radarr:7878
 RADARR_API_KEY=your-radarr-api-key-here
-OUTPUT_FILE=/data/blacklist.json
+OUTPUT_FILE=/data/blocklist.json
 LOG_LEVEL=INFO
 TZ=Europe/Zurich
 EOF
@@ -63,7 +63,7 @@ Set via environment variables:
 |----------|-------------|---------|
 | `RADARR_URL` | Radarr API base URL | `http://radarr:7878` |
 | `RADARR_API_KEY` | Radarr API key | *Required* |
-| `OUTPUT_FILE` | Output JSON path | `/data/blacklist.json` |
+| `OUTPUT_FILE` | Output JSON path | `/data/blocklist.json` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
 ## Output Format
@@ -85,7 +85,7 @@ Set via environment variables:
 # Set environment variables
 export RADARR_URL=http://localhost:7878
 export RADARR_API_KEY=your-api-key-here
-export OUTPUT_FILE=./test-blacklist.json
+export OUTPUT_FILE=./test-blocklist.json
 
 # Run directly
 python export_radarr_exclusions.py
@@ -94,7 +94,7 @@ python export_radarr_exclusions.py
 docker-compose run --rm radarr-exclusions-export
 
 # Check output
-cat test-blacklist.json | jq
+cat test-blocklist.json | jq
 ```
 
 ## Troubleshooting
@@ -127,7 +127,7 @@ curl -H "X-Api-Key: YOUR_KEY" http://localhost:7878/api/v3/exclusions | jq
 ## Integration with List-Sync
 
 Once the export runs successfully, list-sync will automatically:
-1. Load `/data/blacklist.json` on startup
+1. Load `/data/blocklist.json` on startup
 2. Filter out blocked items before requesting
 3. Log blocked items as status="blocked"
 

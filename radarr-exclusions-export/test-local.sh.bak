@@ -23,7 +23,7 @@ fi
 
 # Configuration
 RADARR_URL="${RADARR_URL:-https://radarr.discomarder.live}"
-OUTPUT_FILE="./test-blacklist.json"
+OUTPUT_FILE="./test-blocklist.json"
 
 echo "Configuration:"
 echo "  RADARR_URL: $RADARR_URL"
@@ -112,9 +112,9 @@ echo "✅ All tests passed!"
 echo "============================================"
 echo ""
 echo "Next steps:"
-echo "  1. Review test-blacklist.json"
+echo "  1. Review test-blocklist.json"
 echo "  2. Push to GitHub: git push"
 echo "  3. Clone on Saturn and build from Git repo"
-echo "  4. Verify: ssh saturn.local 'cat /volume1/docker/listsync/data/blacklist.json'"
+echo "  4. Verify: ssh saturn.local 'cat /volume1/docker/listsync/data/blocklist.json'"
 echo ""
 

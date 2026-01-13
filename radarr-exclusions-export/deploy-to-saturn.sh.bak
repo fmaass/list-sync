@@ -41,7 +41,7 @@ fi
 ssh saturn.local "cd $REPO_DIR/radarr-exclusions-export && cat > .env << 'EOF'
 RADARR_URL=http://radarr:7878
 RADARR_API_KEY=$RADARR_API_KEY
-OUTPUT_FILE=/data/blacklist.json
+OUTPUT_FILE=/data/blocklist.json
 LOG_LEVEL=INFO
 TZ=Europe/Zurich
 EOF
@@ -60,7 +60,7 @@ echo "  ✅ Export completed"
 echo ""
 
 echo "Step 5: Verifying output..."
-ssh saturn.local "cat $DATA_DIR/blacklist.json | jq '{version, source, total_count, movies: (.movies | length)}'"
+ssh saturn.local "cat $DATA_DIR/blocklist.json | jq '{version, source, total_count, movies: (.movies | length)}'"
 echo ""
 
 echo "Step 6: Setting up cron job..."
@@ -73,7 +73,7 @@ echo "============================================"
 echo "✅ Deployment complete (via Git)!"
 echo "============================================"
 echo ""
-echo "Blocklist location: $DATA_DIR/blacklist.json"
+echo "Blocklist location: $DATA_DIR/blocklist.json"
 echo "Git repo location: $REPO_DIR"
 echo "Service location: $REPO_DIR/radarr-exclusions-export"
 echo "Cron schedule: Daily at 2:30 AM"
