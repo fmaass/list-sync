@@ -147,18 +147,37 @@ def fetch_mdblist_list(list_id: str) -> List[Dict[str, Any]]:
         raise
 
 
-def get_mdblist_list_name(list_url: str) -> Optional[str]:
+def get_mdblist_list_name(list_url: str, use_db_cache: bool = True) -> Optional[str]:
     """
     Fetch the display name of an MDBList list from the page title.
+    Uses database caching - names are fetched once and stored permanently.
     
     Args:
         list_url: Full MDBList URL (e.g., https://mdblist.com/lists/moviemarder/external/84806)
+        use_db_cache: Whether to use database cache (default: True)
         
     Returns:
         str: List name (e.g., "New German Cinema") or None if failed
     """
+    import sqlite3
+    from ..database import DB_FILE
+    
+    # Check database cache first
+    if use_db_cache:
+        try:
+            with sqlite3.connect(DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT list_name FROM lists WHERE list_url = ? AND list_name IS NOT NULL', (list_url,))
+                result = cursor.fetchone()
+                if result and result[0]:
+                    logger.debug(f"Using cached list name from DB: {result[0]}")
+                    return result[0]
+        except Exception as e:
+            logger.debug(f"DB cache lookup failed: {e}")
+    
+    # Fetch from MDBList
     try:
-        response = requests.get(list_url, timeout=10, headers={
+        response = requests.get(list_url, timeout=5, headers={
             'User-Agent': 'Mozilla/5.0 (compatible; ListSync/1.0)'
         })
         response.raise_for_status()
@@ -171,16 +190,25 @@ def get_mdblist_list_name(list_url: str) -> Optional[str]:
             # Extract everything before the first comma
             if ',' in full_title:
                 list_name = full_title.split(',')[0].strip()
-                logger.debug(f"Extracted list name: {list_name} from {list_url}")
-                return list_name
             else:
                 # No comma, return as-is (minus "- mdblist.com" suffix)
                 list_name = full_title.replace('- mdblist.com', '').strip()
-                return list_name
+            
+            # Save to database cache
+            if use_db_cache:
+                try:
+                    with sqlite3.connect(DB_FILE) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute('UPDATE lists SET list_name = ? WHERE list_url = ?', (list_name, list_url))
+                        conn.commit()
+                        logger.info(f"Cached list name in DB: {list_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to cache list name: {e}")
+            
+            return list_name
         
-        logger.warning(f"Could not extract list name from {list_url}")
         return None
         
     except Exception as e:
-        logger.warning(f"Failed to fetch list name from {list_url}: {e}")
+        logger.debug(f"Failed to fetch list name from {list_url}: {e}")
         return None
