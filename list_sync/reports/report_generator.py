@@ -766,8 +766,8 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         
         # Always show the section, even if empty (so user knows tracking is working)
         html += f"""
-        <div class="list-section">
-            <h2>📈 List Changes (Last 7 Days)</h2>
+        <div class="section">
+            <h3 class="section-title">📈 List Changes (Last 7 Days)</h3>
 """
         
         if newcomers or removals:
