@@ -4,11 +4,14 @@ MDBList provider for ListSync.
 
 import logging
 import re
-from typing import List, Dict, Any
+import requests
+from typing import List, Dict, Any, Optional
 
 from seleniumbase import SB
 
 from . import register_provider
+
+logger = logging.getLogger(__name__)
 
 
 @register_provider("mdblist")
@@ -142,3 +145,42 @@ def fetch_mdblist_list(list_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logging.error(f"Error fetching MDBList: {str(e)}")
         raise
+
+
+def get_mdblist_list_name(list_url: str) -> Optional[str]:
+    """
+    Fetch the display name of an MDBList list from the page title.
+    
+    Args:
+        list_url: Full MDBList URL (e.g., https://mdblist.com/lists/moviemarder/external/84806)
+        
+    Returns:
+        str: List name (e.g., "New German Cinema") or None if failed
+    """
+    try:
+        response = requests.get(list_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; ListSync/1.0)'
+        })
+        response.raise_for_status()
+        
+        # Extract title tag
+        title_match = re.search(r'<title>([^<]+)</title>', response.text, re.IGNORECASE)
+        if title_match:
+            full_title = title_match.group(1).strip()
+            # Format: "List Name, a list by username - mdblist.com"
+            # Extract everything before the first comma
+            if ',' in full_title:
+                list_name = full_title.split(',')[0].strip()
+                logger.debug(f"Extracted list name: {list_name} from {list_url}")
+                return list_name
+            else:
+                # No comma, return as-is (minus "- mdblist.com" suffix)
+                list_name = full_title.replace('- mdblist.com', '').strip()
+                return list_name
+        
+        logger.warning(f"Could not extract list name from {list_url}")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch list name from {list_url}: {e}")
+        return None

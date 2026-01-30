@@ -112,25 +112,40 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
             
             total = len(items)
             
-            # Format list name - extract meaningful parts from URL
+            # Format list name - try to fetch actual name from MDBList
+            display_name = None
+            
+            # Try to fetch actual list name from MDBList
             if 'mdblist.com/lists/' in list_id:
-                # Extract username and list ID from MDBList URL
-                # https://mdblist.com/lists/moviemarder/external/66765 -> "moviemarder/66765"
-                parts = list_id.split('/')
-                if 'external' in parts:
-                    idx = parts.index('external')
-                    username = parts[idx - 1] if idx > 0 else 'unknown'
-                    list_num = parts[-1] if len(parts) > idx else 'unknown'
-                    display_name = f"{username}/{list_num}"
-                elif len(parts) >= 2:
-                    # Format: username/listname
-                    display_name = '/'.join(parts[-2:])
+                try:
+                    from ..providers.mdblist import get_mdblist_list_name
+                    fetched_name = get_mdblist_list_name(list_id)
+                    if fetched_name:
+                        display_name = fetched_name
+                        logger.debug(f"Using fetched list name: {display_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch list name for {list_id}: {e}")
+            
+            # Fallback to URL parsing if fetch failed
+            if not display_name:
+                if 'mdblist.com/lists/' in list_id:
+                    # Extract username and list ID from MDBList URL
+                    # https://mdblist.com/lists/moviemarder/external/66765 -> "moviemarder/66765"
+                    parts = list_id.split('/')
+                    if 'external' in parts:
+                        idx = parts.index('external')
+                        username = parts[idx - 1] if idx > 0 else 'unknown'
+                        list_num = parts[-1] if len(parts) > idx else 'unknown'
+                        display_name = f"{username}/{list_num}"
+                    elif len(parts) >= 2:
+                        # Format: username/listname
+                        display_name = '/'.join(parts[-2:])
+                    else:
+                        display_name = parts[-1] if parts else list_id[-40:]
+                elif 'external/' in list_id:
+                    display_name = f"List {list_id.split('/')[-1]}"
                 else:
-                    display_name = parts[-1] if parts else list_id[-40:]
-            elif 'external/' in list_id:
-                display_name = f"List {list_id.split('/')[-1]}"
-            else:
-                display_name = list_id[-40:] if len(list_id) > 40 else list_id
+                    display_name = list_id[-40:] if len(list_id) > 40 else list_id
             
             # If list has no items yet, show it but indicate it hasn't been synced
             if total == 0:
@@ -407,6 +422,7 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     duration_secs = int(sync_results.start_time % 60) if hasattr(sync_results, 'start_time') else 0
     
     # Build HTML (CRITICAL: must be f-string for variable interpolation)
+    # Industry-standard email newsletter design (GitHub/Stripe/Datadog style)
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -414,194 +430,230 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            background: #0f0f0f;
-            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f6f8fa !important;
+            color: #24292e !important;
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            line-height: 1.5;
+        }}
+        .email-wrapper {{
+            background-color: #f6f8fa !important;
+            padding: 40px 20px;
         }}
         .container {{
-            max-width: 800px;
+            max-width: 600px;
             margin: 0 auto;
-            background: #1a1a1a;
-            border-radius: 12px;
+            background-color: #ffffff !important;
+            border-radius: 6px;
             overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            box-shadow: 0 1px 3px rgba(27,31,35,0.12), 0 1px 2px rgba(27,31,35,0.24);
+            border: 1px solid #d1d5da;
         }}
         .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 40px;
-            text-align: center;
+            background-color: #24292e !important;
+            padding: 24px 32px;
+            border-bottom: 2px solid #0366d6;
         }}
         .header h1 {{
             margin: 0;
-            font-size: 32px;
-            font-weight: 300;
+            font-size: 24px;
+            font-weight: 600;
+            color: #ffffff !important;
         }}
         .header p {{
-            margin: 10px 0 0 0;
-            opacity: 0.9;
+            margin: 8px 0 0 0;
             font-size: 14px;
+            color: #959da5 !important;
         }}
-        .overview {{
-            padding: 30px;
-            background: #222;
+        .section {{
+            padding: 24px 32px;
+            border-bottom: 1px solid #e1e4e8;
         }}
-        .stat-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
+        .section:last-child {{
+            border-bottom: none;
         }}
-        .stat-card {{
-            background: #2a2a2a;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
+        .section-title {{
+            margin: 0 0 16px 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: #24292e !important;
         }}
-        .stat-card.success {{ border-left-color: #22c55e; }}
-        .stat-card.warning {{ border-left-color: #f59e0b; }}
-        .stat-card.danger {{ border-left-color: #ef4444; }}
-        .stat-number {{
+        .stats-row {{
+            display: table;
+            width: 100%;
+            margin: 16px 0;
+        }}
+        .stat-box {{
+            display: table-cell;
+            padding: 16px;
+            text-align: center;
+            border: 1px solid #e1e4e8;
+            background-color: #fafbfc !important;
+        }}
+        .stat-box:not(:last-child) {{
+            border-right: none;
+        }}
+        .stat-value {{
             font-size: 32px;
-            font-weight: bold;
-            margin: 5px 0;
+            font-weight: 600;
+            color: #24292e !important;
+            margin: 0;
         }}
         .stat-label {{
-            font-size: 14px;
-            opacity: 0.7;
+            font-size: 12px;
+            color: #586069 !important;
+            margin: 4px 0 0 0;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }}
-        .stat-pct {{
-            font-size: 18px;
-            opacity: 0.8;
+        .stat-box.success {{ background-color: #dcffe4 !important; }}
+        .stat-box.success .stat-value {{ color: #22863a !important; }}
+        .stat-box.warning {{ background-color: #fff5b1 !important; }}
+        .stat-box.warning .stat-value {{ color: #b08800 !important; }}
+        .stat-box.danger {{ background-color: #ffdce0 !important; }}
+        .stat-box.danger .stat-value {{ color: #d73a49 !important; }}
+        .list-table {{
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 16px 0;
         }}
-        .list-section {{
-            padding: 30px;
+        .list-table th {{
+            background-color: #fafbfc !important;
+            color: #586069 !important;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 16px;
+            text-align: left;
+            border: 1px solid #e1e4e8;
+            border-bottom: 2px solid #e1e4e8;
         }}
-        .list-item {{
-            background: #2a2a2a;
-            padding: 20px;
-            margin: 15px 0;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }}
-        .list-header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }}
-        .list-name {{
-            font-size: 18px;
-            font-weight: 500;
-        }}
-        .list-stats {{
+        .list-table td {{
+            padding: 14px 16px;
+            border: 1px solid #e1e4e8;
+            border-top: none;
+            background-color: #ffffff !important;
+            color: #24292e !important;
             font-size: 14px;
-            opacity: 0.8;
+        }}
+        .list-name-cell {{
+            font-weight: 500;
+            color: #0366d6 !important;
         }}
         .progress-bar {{
-            height: 24px;
-            background: #333;
-            border-radius: 12px;
+            height: 8px;
+            background-color: #e1e4e8 !important;
+            border-radius: 4px;
             overflow: hidden;
-            margin: 10px 0;
+            margin: 4px 0;
         }}
         .progress-fill {{
             height: 100%;
-            background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: 600;
-            color: white;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+            background-color: #28a745 !important;
+            border-radius: 4px;
         }}
         .missing-breakdown {{
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e2e8f0;
             font-size: 13px;
         }}
         .missing-breakdown-detailed {{
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e2e8f0;
         }}
         .missing-header {{
             font-weight: 600;
             margin-bottom: 12px;
             font-size: 14px;
-            opacity: 0.9;
+            color: #475569 !important;
         }}
         .missing-category {{
-            margin: 15px 0;
-            background: #252525;
+            margin: 12px 0;
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0;
             border-radius: 6px;
-            padding: 12px 15px;
+            padding: 14px 16px;
         }}
         .category-title {{
             font-weight: 600;
             font-size: 13px;
-            margin-bottom: 8px;
-            color: #e0e0e0;
+            margin-bottom: 10px;
+            color: #1e293b !important;
         }}
         .movie-list {{
             list-style: none;
-            padding: 0 0 0 10px;
+            padding: 0;
             margin: 0;
         }}
         .movie-list li {{
-            padding: 5px 0;
-            font-size: 12px;
-            opacity: 0.85;
-            border-bottom: 1px solid #2a2a2a;
-            line-height: 1.4;
+            padding: 8px 0;
+            font-size: 13px;
+            color: #334155 !important;
+            border-bottom: 1px solid #f1f5f9;
+            line-height: 1.5;
         }}
         .movie-list li:last-child {{
             border-bottom: none;
         }}
         .movie-list li:before {{
             content: "• ";
-            color: #667eea;
+            color: #6366f1;
             font-weight: bold;
-            margin-right: 6px;
+            margin-right: 8px;
         }}
         .more-items {{
-            opacity: 0.6;
+            color: #94a3b8 !important;
             font-style: italic;
         }}
         .missing-item {{
             display: inline-block;
             margin: 5px 10px 5px 0;
-            padding: 4px 12px;
-            background: #333;
-            border-radius: 4px;
+            padding: 6px 14px;
+            background-color: #f1f5f9 !important;
+            color: #475569 !important;
+            border-radius: 6px;
+            font-size: 13px;
         }}
         .footer {{
             text-align: center;
-            padding: 20px;
-            opacity: 0.6;
+            padding: 24px;
+            background-color: #f8fafc !important;
+            color: #94a3b8 !important;
             font-size: 12px;
+            border-top: 1px solid #e2e8f0;
         }}
         table {{
             width: 100%;
             border-collapse: collapse;
-            margin-top: 10px;
+            margin-top: 12px;
         }}
         th, td {{
-            padding: 8px 12px;
+            padding: 10px 14px;
             text-align: left;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #e2e8f0;
         }}
         th {{
-            background: #2a2a2a;
+            background-color: #f8fafc !important;
+            color: #475569 !important;
             font-weight: 600;
             font-size: 12px;
             text-transform: uppercase;
-            opacity: 0.7;
+            letter-spacing: 0.5px;
+        }}
+        td {{
+            color: #334155 !important;
+        }}
+        a {{
+            color: #4f46e5 !important;
+            text-decoration: none;
+        }}
+        a:hover {{
+            text-decoration: underline;
         }}
     </style>
 </head>
