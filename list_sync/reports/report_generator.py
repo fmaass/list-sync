@@ -112,25 +112,40 @@ def generate_html_report(sync_results, synced_lists, max_items_per_category: int
             
             total = len(items)
             
-            # Format list name - extract meaningful parts from URL
+            # Format list name - try to fetch actual name from MDBList
+            display_name = None
+            
+            # Try to fetch actual list name from MDBList
             if 'mdblist.com/lists/' in list_id:
-                # Extract username and list ID from MDBList URL
-                # https://mdblist.com/lists/moviemarder/external/66765 -> "moviemarder/66765"
-                parts = list_id.split('/')
-                if 'external' in parts:
-                    idx = parts.index('external')
-                    username = parts[idx - 1] if idx > 0 else 'unknown'
-                    list_num = parts[-1] if len(parts) > idx else 'unknown'
-                    display_name = f"{username}/{list_num}"
-                elif len(parts) >= 2:
-                    # Format: username/listname
-                    display_name = '/'.join(parts[-2:])
+                try:
+                    from ..providers.mdblist import get_mdblist_list_name
+                    fetched_name = get_mdblist_list_name(list_id)
+                    if fetched_name:
+                        display_name = fetched_name
+                        logger.debug(f"Using fetched list name: {display_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch list name for {list_id}: {e}")
+            
+            # Fallback to URL parsing if fetch failed
+            if not display_name:
+                if 'mdblist.com/lists/' in list_id:
+                    # Extract username and list ID from MDBList URL
+                    # https://mdblist.com/lists/moviemarder/external/66765 -> "moviemarder/66765"
+                    parts = list_id.split('/')
+                    if 'external' in parts:
+                        idx = parts.index('external')
+                        username = parts[idx - 1] if idx > 0 else 'unknown'
+                        list_num = parts[-1] if len(parts) > idx else 'unknown'
+                        display_name = f"{username}/{list_num}"
+                    elif len(parts) >= 2:
+                        # Format: username/listname
+                        display_name = '/'.join(parts[-2:])
+                    else:
+                        display_name = parts[-1] if parts else list_id[-40:]
+                elif 'external/' in list_id:
+                    display_name = f"List {list_id.split('/')[-1]}"
                 else:
-                    display_name = parts[-1] if parts else list_id[-40:]
-            elif 'external/' in list_id:
-                display_name = f"List {list_id.split('/')[-1]}"
-            else:
-                display_name = list_id[-40:] if len(list_id) > 40 else list_id
+                    display_name = list_id[-40:] if len(list_id) > 40 else list_id
             
             # If list has no items yet, show it but indicate it hasn't been synced
             if total == 0:
@@ -260,7 +275,7 @@ def _generate_missing_items_html(missing_details: Dict, max_items: int = 5, over
             if tmdb_id:
                 # Link format: https://seerr.domain.com/movie/tmdb:[id] or use search
                 seerr_link = f"{overseerr_url.rstrip('/')}/discover/movies?query={title.replace(' ', '%20')}"
-                return f"<a href='{seerr_link}' target='_blank' style='color: #667eea; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                return f"<a href='{seerr_link}' target='_blank'>{title}</a>{year_str}"
         
         return f"{title}{year_str}"
     
@@ -402,11 +417,23 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     blocked_pct = (blocked / total_items * 100) if total_items > 0 else 0
     request_failed_pct = (request_failed / total_items * 100) if total_items > 0 else 0
     
-    # Format duration
-    duration_mins = int(sync_results.start_time // 60) if hasattr(sync_results, 'start_time') else 0
-    duration_secs = int(sync_results.start_time % 60) if hasattr(sync_results, 'start_time') else 0
+    # Calculate sync duration and metadata
+    import time as _time
+    if hasattr(sync_results, 'start_time') and sync_results.start_time:
+        sync_duration_secs = _time.time() - sync_results.start_time
+        duration_mins = int(sync_duration_secs // 60)
+        duration_secs = int(sync_duration_secs % 60)
+        sync_started_at = datetime.fromtimestamp(sync_results.start_time).strftime('%H:%M')
+    else:
+        duration_mins = 0
+        duration_secs = 0
+        sync_started_at = "unknown"
+    
+    num_synced_lists = len(sync_results.synced_lists) if hasattr(sync_results, 'synced_lists') else 0
+    sync_cancelled = getattr(sync_results, 'cancelled', False)
     
     # Build HTML (CRITICAL: must be f-string for variable interpolation)
+    # Email-compatible newsletter design — light theme, table-based layouts
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -414,194 +441,268 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            background: #0f0f0f;
-            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f5f5f5;
+            color: #24292e;
             margin: 0;
-            padding: 20px;
+            padding: 10px;
+            line-height: 1.5;
         }}
         .container {{
-            max-width: 800px;
+            max-width: 700px;
             margin: 0 auto;
-            background: #1a1a1a;
-            border-radius: 12px;
+            background: white;
+            padding: 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }}
         .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 40px;
-            text-align: center;
+            background: #24292e;
+            padding: 24px 30px;
+            border-bottom: 3px solid #0366d6;
         }}
         .header h1 {{
             margin: 0;
-            font-size: 32px;
-            font-weight: 300;
+            font-size: 22px;
+            font-weight: 600;
+            color: #ffffff;
         }}
-        .header p {{
-            margin: 10px 0 0 0;
-            opacity: 0.9;
-            font-size: 14px;
+        .header .meta {{
+            margin: 8px 0 0 0;
+            font-size: 13px;
+            color: #959da5;
         }}
-        .overview {{
-            padding: 30px;
-            background: #222;
+        .section {{
+            padding: 24px 30px;
+            border-bottom: 1px solid #e1e4e8;
         }}
-        .stat-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
+        .section:last-child {{
+            border-bottom: none;
         }}
-        .stat-card {{
-            background: #2a2a2a;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
+        .section-title {{
+            margin: 0 0 16px 0;
+            font-size: 17px;
+            font-weight: 600;
+            color: #24292e;
+            border-bottom: 2px solid #e1e4e8;
+            padding-bottom: 8px;
         }}
-        .stat-card.success {{ border-left-color: #22c55e; }}
-        .stat-card.warning {{ border-left-color: #f59e0b; }}
-        .stat-card.danger {{ border-left-color: #ef4444; }}
+        /* Stat grid — uses table for email compatibility */
+        .stat-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }}
+        .stat-table td {{
+            padding: 14px 10px;
+            text-align: center;
+            border: 1px solid #e1e4e8;
+            background-color: #fafbfc;
+            vertical-align: top;
+            width: 20%;
+        }}
+        .stat-table td.success {{
+            background-color: #dcffe4;
+        }}
+        .stat-table td.warning {{
+            background-color: #fff5b1;
+        }}
+        .stat-table td.danger {{
+            background-color: #ffdce0;
+        }}
         .stat-number {{
-            font-size: 32px;
-            font-weight: bold;
-            margin: 5px 0;
+            font-size: 26px;
+            font-weight: 700;
+            color: #24292e;
+            margin: 0;
         }}
+        td.success .stat-number {{ color: #22863a; }}
+        td.warning .stat-number {{ color: #b08800; }}
+        td.danger .stat-number {{ color: #d73a49; }}
         .stat-label {{
-            font-size: 14px;
-            opacity: 0.7;
+            font-size: 11px;
+            color: #586069;
+            margin: 4px 0 0 0;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }}
         .stat-pct {{
-            font-size: 18px;
-            opacity: 0.8;
+            font-size: 13px;
+            color: #586069;
+            margin: 2px 0 0 0;
         }}
-        .list-section {{
-            padding: 30px;
+        .stat-detail {{
+            font-size: 10px;
+            color: #959da5;
+            margin-top: 4px;
         }}
+        /* Info boxes — colored border-left, light bg */
+        .info-box {{
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            border: 1px solid #e1e4e8;
+        }}
+        .info-box h3 {{
+            margin: 0 0 6px 0;
+            font-size: 15px;
+        }}
+        .info-box .subtitle {{
+            color: #586069;
+            font-size: 13px;
+            margin: 0 0 12px 0;
+        }}
+        .info-box ul {{
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }}
+        .info-box li {{
+            padding: 7px 0;
+            border-bottom: 1px solid #e1e4e8;
+            font-size: 14px;
+            color: #24292e;
+        }}
+        .info-box li:last-child {{
+            border-bottom: none;
+        }}
+        .info-box .item-meta {{
+            color: #959da5;
+            font-size: 12px;
+            margin-left: 8px;
+        }}
+        .info-box .more-items {{
+            color: #959da5;
+            font-style: italic;
+            font-size: 13px;
+        }}
+        /* List breakdown items */
         .list-item {{
-            background: #2a2a2a;
-            padding: 20px;
-            margin: 15px 0;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }}
-        .list-header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
+            padding: 14px 16px;
+            margin: 10px 0;
+            border: 1px solid #e1e4e8;
+            border-radius: 6px;
+            background-color: #ffffff;
         }}
         .list-name {{
-            font-size: 18px;
-            font-weight: 500;
+            font-weight: 600;
+            font-size: 14px;
+            color: #24292e;
+            margin-bottom: 2px;
         }}
         .list-stats {{
-            font-size: 14px;
-            opacity: 0.8;
+            font-size: 13px;
+            color: #586069;
         }}
         .progress-bar {{
-            height: 24px;
-            background: #333;
-            border-radius: 12px;
+            height: 8px;
+            background-color: #e1e4e8;
+            border-radius: 4px;
             overflow: hidden;
-            margin: 10px 0;
+            margin: 8px 0 4px 0;
         }}
         .progress-fill {{
             height: 100%;
-            background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            background-color: #28a745;
+            border-radius: 4px;
+        }}
+        .progress-text {{
             font-size: 12px;
-            font-weight: 600;
-            color: white;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+            color: #586069;
         }}
-        .missing-breakdown {{
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
-            font-size: 13px;
-        }}
+        /* Missing items breakdown */
         .missing-breakdown-detailed {{
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid #e1e4e8;
         }}
         .missing-header {{
             font-weight: 600;
-            margin-bottom: 12px;
-            font-size: 14px;
-            opacity: 0.9;
+            margin-bottom: 10px;
+            font-size: 13px;
+            color: #586069;
         }}
         .missing-category {{
-            margin: 15px 0;
-            background: #252525;
+            margin: 10px 0;
+            background-color: #fafbfc;
+            border: 1px solid #e1e4e8;
             border-radius: 6px;
-            padding: 12px 15px;
+            padding: 12px 14px;
         }}
         .category-title {{
             font-weight: 600;
             font-size: 13px;
             margin-bottom: 8px;
-            color: #e0e0e0;
+            color: #24292e;
         }}
         .movie-list {{
             list-style: none;
-            padding: 0 0 0 10px;
+            padding: 0;
             margin: 0;
         }}
         .movie-list li {{
-            padding: 5px 0;
-            font-size: 12px;
-            opacity: 0.85;
-            border-bottom: 1px solid #2a2a2a;
-            line-height: 1.4;
+            padding: 6px 0;
+            font-size: 13px;
+            color: #24292e;
+            border-bottom: 1px solid #e1e4e8;
+            line-height: 1.5;
         }}
         .movie-list li:last-child {{
             border-bottom: none;
         }}
         .movie-list li:before {{
-            content: "• ";
-            color: #667eea;
+            content: "\\2022  ";
+            color: #0366d6;
             font-weight: bold;
-            margin-right: 6px;
         }}
-        .more-items {{
-            opacity: 0.6;
-            font-style: italic;
+        /* Insights table */
+        .insight-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
         }}
-        .missing-item {{
-            display: inline-block;
-            margin: 5px 10px 5px 0;
-            padding: 4px 12px;
-            background: #333;
-            border-radius: 4px;
+        .insight-table td {{
+            padding: 14px;
+            border: 1px solid #e1e4e8;
+            background-color: #fafbfc;
+            vertical-align: top;
+            text-align: center;
         }}
+        .insight-icon {{
+            font-size: 22px;
+        }}
+        .insight-value {{
+            font-size: 20px;
+            font-weight: 700;
+            color: #24292e;
+            margin: 4px 0;
+        }}
+        .insight-label {{
+            font-size: 12px;
+            color: #586069;
+        }}
+        /* Footer */
         .footer {{
             text-align: center;
             padding: 20px;
-            opacity: 0.6;
+            background-color: #fafbfc;
+            color: #959da5;
             font-size: 12px;
+            border-top: 1px solid #e1e4e8;
         }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
+        a {{
+            color: #0366d6;
+            text-decoration: none;
         }}
-        th, td {{
-            padding: 8px 12px;
-            text-align: left;
-            border-bottom: 1px solid #333;
+        a:hover {{
+            text-decoration: underline;
         }}
-        th {{
-            background: #2a2a2a;
-            font-weight: 600;
-            font-size: 12px;
-            text-transform: uppercase;
-            opacity: 0.7;
+        @media (max-width: 600px) {{
+            .container {{ border-radius: 0; }}
+            .section {{ padding: 16px 15px; }}
+            .stat-table td {{ padding: 10px 6px; }}
+            .stat-number {{ font-size: 20px; }}
         }}
     </style>
 </head>
@@ -610,7 +711,15 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         <!-- Header -->
         <div class="header">
             <h1>🎬 List-Sync Report</h1>
-            <p>{datetime.now().strftime('%B %d, %Y at %H:%M')} | {total_items} items tracked</p>
+            <div class="meta">{datetime.now().strftime('%B %d, %Y at %H:%M')} &middot; {total_items} items tracked</div>
+        </div>
+        
+        <!-- Sync Status Bar -->
+        <div style="background: {'#fff8e1' if sync_cancelled else '#e8f5e9'}; padding: 12px 30px; border-bottom: 1px solid {'#ffe082' if sync_cancelled else '#a5d6a7'}; font-size: 13px; color: {'#e65100' if sync_cancelled else '#1b5e20'};">
+            <strong>{'⚠️ Sync cancelled' if sync_cancelled else '✅ Sync completed'}</strong>
+            &nbsp;&middot;&nbsp; Started {sync_started_at}
+            &nbsp;&middot;&nbsp; Duration: {duration_mins}m {duration_secs}s
+            &nbsp;&middot;&nbsp; {total_items} items across {num_synced_lists} lists
         </div>
         
         <!-- Health Summary -->
@@ -649,59 +758,67 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         health_text = f"All systems healthy - {in_library} in library, {pending} downloading"
         health_color = "#22c55e"
     
+    # Health summary banner — light bg with colored left border
+    health_bg = '#fff8e1' if health_status == 'warning' else '#e8f5e9'
+    health_text_color = '#7c6900' if health_status == 'warning' else '#1b5e20'
+    
     html += f"""
-        <div style="background: rgba({'251, 191, 36' if health_status == 'warning' else '34, 197, 94'}, 0.1); padding: 20px; margin: 20px 30px; border-radius: 8px; border-left: 4px solid {health_color};">
-            <h2 style="margin: 0; color: {health_color};">{health_icon} {health_text}</h2>
+        <div class="section" style="padding-bottom: 16px;">
+            <div style="padding: 16px 20px; border-radius: 6px; border-left: 4px solid {health_color}; background: {health_bg};">
+                <div style="margin: 0; font-size: 16px; font-weight: 600; color: {health_text_color};">{health_icon} {health_text}</div>
 """
     
     if action_items:
         html += f"""
-            <ul style="margin: 15px 0 0 0; padding-left: 20px; opacity: 0.9;">
+                <ul style="margin: 10px 0 0 0; padding-left: 20px; color: {health_text_color}; font-size: 14px;">
 """
         for item in action_items:
             html += f"""
-                <li>{item}</li>
+                    <li>{item}</li>
 """
         html += f"""
-            </ul>
+                </ul>
 """
     
     html += f"""
+            </div>
         </div>
         
-        <!-- Overview -->
-        <div class="overview">
-            <h2 style="margin-top:0;">📊 Sync Overview</h2>
-            <div class="stat-grid">
-                <div class="stat-card success">
-                    <div class="stat-label">In Your Library</div>
-                    <div class="stat-number">{in_library}</div>
-                    <div class="stat-pct">{in_library_pct:.1f}%</div>
-                </div>
-                <div class="stat-card warning">
-                    <div class="stat-label">Approved & Downloading</div>
-                    <div class="stat-number">{pending}</div>
-                    <div class="stat-pct">{pending_pct:.1f}%</div>
-                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Already approved, waiting for download</div>
-                </div>
-                <div class="stat-card danger">
-                    <div class="stat-label">Blocked</div>
-                    <div class="stat-number">{blocked}</div>
-                    <div class="stat-pct">{blocked_pct:.1f}%</div>
-                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Filtered by blocklist</div>
-                </div>
-                <div class="stat-card danger">
-                    <div class="stat-label">Request Failed</div>
-                    <div class="stat-number">{request_failed}</div>
-                    <div class="stat-pct">{request_failed_pct:.1f}%</div>
-                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Unable to request</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Not Found</div>
-                    <div class="stat-number">{not_found}</div>
-                    <div style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Not in Overseerr</div>
-                </div>
-            </div>
+        <!-- Overview — table-based for email compatibility -->
+        <div class="section">
+            <h3 class="section-title">📊 Sync Overview</h3>
+            <table class="stat-table">
+                <tr>
+                    <td class="success">
+                        <div class="stat-number">{in_library}</div>
+                        <div class="stat-label">In Library</div>
+                        <div class="stat-pct">{in_library_pct:.1f}%</div>
+                    </td>
+                    <td class="warning">
+                        <div class="stat-number">{pending}</div>
+                        <div class="stat-label">Downloading</div>
+                        <div class="stat-pct">{pending_pct:.1f}%</div>
+                        <div class="stat-detail">Approved, waiting</div>
+                    </td>
+                    <td class="danger">
+                        <div class="stat-number">{blocked}</div>
+                        <div class="stat-label">Blocked</div>
+                        <div class="stat-pct">{blocked_pct:.1f}%</div>
+                        <div class="stat-detail">Filtered by blocklist</div>
+                    </td>
+                    <td class="danger">
+                        <div class="stat-number">{request_failed}</div>
+                        <div class="stat-label">Failed</div>
+                        <div class="stat-pct">{request_failed_pct:.1f}%</div>
+                        <div class="stat-detail">Unable to request</div>
+                    </td>
+                    <td>
+                        <div class="stat-number">{not_found}</div>
+                        <div class="stat-label">Not Found</div>
+                        <div class="stat-detail">Not in Overseerr</div>
+                    </td>
+                </tr>
+            </table>
         </div>
         
         <!-- Newcomers and Removals -->
@@ -714,18 +831,18 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         
         # Always show the section, even if empty (so user knows tracking is working)
         html += f"""
-        <div class="list-section">
-            <h2>📈 List Changes (Last 7 Days)</h2>
+        <div class="section">
+            <h3 class="section-title">📈 List Changes (Last 7 Days)</h3>
 """
         
         if newcomers or removals:
             # Newcomers section
             if newcomers:
                 html += f"""
-            <div style="background: #1a3a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                <h3 style="margin-top: 0; color: #4ade80;">✨ Newcomers ({len(newcomers)} movies)</h3>
-                <p style="opacity: 0.7; margin-bottom: 15px;">Movies added to your lists in the last 7 days</p>
-                <ul style="list-style: none; padding: 0; margin: 0;">
+            <div class="info-box" style="background: #e8f5e9; border-left: 4px solid #2e7d32;">
+                <h3 style="color: #1b5e20;">✨ Newcomers ({len(newcomers)} movies)</h3>
+                <p class="subtitle">Movies added to your lists in the last 7 days</p>
+                <ul>
 """
                 for item in newcomers[:max_items_per_category]:
                     title = item.get('title', 'Unknown')
@@ -736,21 +853,21 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     tmdb_id = item.get('tmdb_id')
                     if overseerr_url and tmdb_id:
                         seerr_link = f"{overseerr_url.rstrip('/')}/discover/movies?query={title.replace(' ', '%20')}"
-                        title_html = f"<a href='{seerr_link}' target='_blank' style='color: #4ade80; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                        title_html = f"<a href='{seerr_link}' target='_blank'>{title}</a>{year_str}"
                     else:
                         title_html = f"{title}{year_str}"
                     
                     html += f"""
-                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <li>
                         {title_html}
-                        <span style="opacity: 0.5; font-size: 12px; margin-left: 10px;">from {list_info}</span>
+                        <span class="item-meta">from {list_info}</span>
                     </li>
 """
                 
                 if len(newcomers) > max_items_per_category:
                     remaining = len(newcomers) - max_items_per_category
                     html += f"""
-                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more newcomers</li>
+                    <li class="more-items">... and {remaining} more newcomers</li>
 """
                 
                 html += f"""
@@ -761,10 +878,10 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             # Removals section
             if removals:
                 html += f"""
-            <div style="background: #3a1a1a; padding: 20px; border-radius: 8px;">
-                <h3 style="margin-top: 0; color: #f87171;">🗑️ Removals ({len(removals)} movies)</h3>
-                <p style="opacity: 0.7; margin-bottom: 15px;">Movies removed from your lists in the last 7 days</p>
-                <ul style="list-style: none; padding: 0; margin: 0;">
+            <div class="info-box" style="background: #fce4ec; border-left: 4px solid #c62828;">
+                <h3 style="color: #b71c1c;">🗑️ Removals ({len(removals)} movies)</h3>
+                <p class="subtitle">Movies removed from your lists in the last 7 days</p>
+                <ul>
 """
                 for item in removals[:max_items_per_category]:
                     title = item.get('title', 'Unknown')
@@ -772,16 +889,16 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     list_info = f"{item['list_type']}/{item['list_id']}"
                     
                     html += f"""
-                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                        <span style="opacity: 0.7;">{title}{year_str}</span>
-                        <span style="opacity: 0.5; font-size: 12px; margin-left: 10px;">from {list_info}</span>
+                    <li>
+                        {title}{year_str}
+                        <span class="item-meta">from {list_info}</span>
                     </li>
 """
                 
                 if len(removals) > max_items_per_category:
                     remaining = len(removals) - max_items_per_category
                     html += f"""
-                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more removals</li>
+                    <li class="more-items">... and {remaining} more removals</li>
 """
                 
                 html += f"""
@@ -791,8 +908,8 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         else:
             # Show message when no changes
             html += f"""
-            <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
-                <p style="margin: 0;">No list changes in the last 7 days. Changes will appear here after the next sync completes.</p>
+            <div style="background: #fafbfc; padding: 20px; border-radius: 6px; text-align: center; border: 1px solid #e1e4e8;">
+                <p style="margin: 0; color: #586069;">No list changes in the last 7 days. Changes will appear here after the next sync completes.</p>
             </div>
 """
         
@@ -802,10 +919,10 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     except Exception as e:
         logger.warning(f"Failed to load newcomers/removals: {e}")
         html += f"""
-        <div class="list-section">
-            <h2>📈 List Changes (Last 7 Days)</h2>
-            <div style="background: #3a1a1a; padding: 20px; border-radius: 8px; text-align: center;">
-                <p style="margin: 0; color: #f87171;">⚠️ Unable to load list changes data</p>
+        <div class="section">
+            <h3 class="section-title">📈 List Changes (Last 7 Days)</h3>
+            <div style="background: #fce4ec; padding: 16px; border-radius: 6px; text-align: center; border: 1px solid #ef9a9a;">
+                <p style="margin: 0; color: #b71c1c;">⚠️ Unable to load list changes data</p>
             </div>
         </div>
 """
@@ -824,17 +941,17 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             
             num_pending = len(pending_requests)
             html += f"""
-        <div class="list-section">
-            <h2>⏳ Open Requests ({num_pending} pending)</h2>
+        <div class="section">
+            <h3 class="section-title">⏳ Open Requests ({num_pending} pending)</h3>
 """
             
             # Manual approval requests
             if manual_requests:
                 html += f"""
-            <div style="background: #3a2a1a; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                <h3 style="margin-top: 0; color: #fbbf24;">🙋 Awaiting Manual Approval ({len(manual_requests)} movies)</h3>
-                <p style="opacity: 0.7; margin-bottom: 15px;">From lists configured for manual review</p>
-                <ul style="list-style: none; padding: 0; margin: 0;">
+            <div class="info-box" style="background: #fff8e1; border-left: 4px solid #f9a825;">
+                <h3 style="color: #e65100;">🙋 Awaiting Manual Approval ({len(manual_requests)} movies)</h3>
+                <p class="subtitle">From lists configured for manual review</p>
+                <ul>
 """
                 for item in manual_requests[:max_items_per_category]:
                     title = item.get('title', 'Unknown')
@@ -846,21 +963,21 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     req_id = item.get('id')
                     if overseerr_url and req_id:
                         seerr_link = f"{overseerr_url.rstrip('/')}/requests?filter=pending"
-                        title_html = f"<a href='{seerr_link}' target='_blank' style='color: #fbbf24; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                        title_html = f"<a href='{seerr_link}' target='_blank'>{title}</a>{year_str}"
                     else:
                         title_html = f"{title}{year_str}"
                     
                     html += f"""
-                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <li>
                         {title_html}
-                        <span style="opacity: 0.5; font-size: 12px; margin-left: 10px;">by {requester}</span>
+                        <span class="item-meta">by {requester}</span>
                     </li>
 """
                 
                 if len(manual_requests) > max_items_per_category:
                     remaining = len(manual_requests) - max_items_per_category
                     html += f"""
-                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more awaiting approval</li>
+                    <li class="more-items">... and {remaining} more awaiting approval</li>
 """
                 
                 html += f"""
@@ -871,10 +988,10 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             # Auto-approved requests (pending download)
             if auto_requests:
                 html += f"""
-            <div style="background: #1a2a3a; padding: 20px; border-radius: 8px;">
-                <h3 style="margin-top: 0; color: #60a5fa;">⏬ Auto-Approved, Awaiting Download ({len(auto_requests)} movies)</h3>
-                <p style="opacity: 0.7; margin-bottom: 15px;">Approved but not yet downloaded</p>
-                <ul style="list-style: none; padding: 0; margin: 0;">
+            <div class="info-box" style="background: #e3f2fd; border-left: 4px solid #1565c0;">
+                <h3 style="color: #0d47a1;">⏬ Auto-Approved, Awaiting Download ({len(auto_requests)} movies)</h3>
+                <p class="subtitle">Approved but not yet downloaded</p>
+                <ul>
 """
                 for item in auto_requests[:max_items_per_category]:
                     title = item.get('title', 'Unknown')
@@ -883,20 +1000,18 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
                     # Add Seerr link
                     if overseerr_url:
                         seerr_link = f"{overseerr_url.rstrip('/')}/requests?filter=pending"
-                        title_html = f"<a href='{seerr_link}' target='_blank' style='color: #60a5fa; text-decoration: none;'>{title}</a>{year_str} <span style='opacity:0.5; font-size: 10px;'>↗</span>"
+                        title_html = f"<a href='{seerr_link}' target='_blank'>{title}</a>{year_str}"
                     else:
                         title_html = f"{title}{year_str}"
                     
                     html += f"""
-                    <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                        {title_html}
-                    </li>
+                    <li>{title_html}</li>
 """
                 
                 if len(auto_requests) > max_items_per_category:
                     remaining = len(auto_requests) - max_items_per_category
                     html += f"""
-                    <li style="padding: 8px 0; opacity: 0.6; font-style: italic;">... and {remaining} more pending download</li>
+                    <li class="more-items">... and {remaining} more pending download</li>
 """
                 
                 html += f"""
@@ -906,8 +1021,8 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             
             if not manual_requests and not auto_requests:
                 html += f"""
-            <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; text-align: center; opacity: 0.7;">
-                <p style="margin: 0;">✅ No open requests! Everything is either approved or in your library.</p>
+            <div style="background: #e8f5e9; padding: 16px; border-radius: 6px; text-align: center; border: 1px solid #a5d6a7;">
+                <p style="margin: 0; color: #1b5e20;">✅ No open requests! Everything is either approved or in your library.</p>
             </div>
 """
             
@@ -924,47 +1039,48 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         blocking_stats = get_blocking_impact_stats(days=7)
         stale_lists = get_list_staleness()
         
-        html += f"""
-        <div class="list-section">
-            <h2>💡 Insights</h2>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-"""
+        # Build insight cells for table
+        insight_cells = []
         
         # Storage prediction
         if storage_est and storage_est.get('total_gb', 0) > 0:
             storage_tb = storage_est.get('total_tb', 0)
             storage_icon = "💾" if storage_tb < 1 else "🗄️"
-            html += f"""
-                <div style="background: #1a2a3a; padding: 15px; border-radius: 8px;">
-                    <div style="font-size: 24px;">{storage_icon}</div>
-                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{storage_tb} TB</div>
-                    <div style="opacity: 0.7; font-size: 12px;">Storage needed for {storage_est.get('pending_movies', 0)} pending movies</div>
-                </div>
-"""
+            insight_cells.append(f"""
+                    <td>
+                        <div class="insight-icon">{storage_icon}</div>
+                        <div class="insight-value">{storage_tb} TB</div>
+                        <div class="insight-label">Storage needed for {storage_est.get('pending_movies', 0)} pending</div>
+                    </td>""")
         
         # Blocking impact
         if blocking_stats and blocking_stats.get('total_blocked', 0) > 0:
-            html += f"""
-                <div style="background: #3a1a1a; padding: 15px; border-radius: 8px;">
-                    <div style="font-size: 24px;">⛔</div>
-                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{blocking_stats['total_blocked']}</div>
-                    <div style="opacity: 0.7; font-size: 12px;">Items blocked (saved from junk)</div>
-                </div>
-"""
+            insight_cells.append(f"""
+                    <td>
+                        <div class="insight-icon">⛔</div>
+                        <div class="insight-value">{blocking_stats['total_blocked']}</div>
+                        <div class="insight-label">Items blocked (saved from junk)</div>
+                    </td>""")
         
         # Most active list
         if list_activity and len(list_activity) > 0:
             top_list = list_activity[0]
-            html += f"""
-                <div style="background: #1a3a2a; padding: 15px; border-radius: 8px;">
-                    <div style="font-size: 24px;">📈</div>
-                    <div style="font-size: 20px; font-weight: bold; margin: 5px 0;">{top_list['avg_per_day']}/day</div>
-                    <div style="opacity: 0.7; font-size: 12px;">Most active: {top_list['list_type']}/{top_list['list_id'][:10]}...</div>
-                </div>
-"""
+            insight_cells.append(f"""
+                    <td>
+                        <div class="insight-icon">📈</div>
+                        <div class="insight-value">{top_list['avg_per_day']}/day</div>
+                        <div class="insight-label">Most active: {top_list['list_type']}/{top_list['list_id'][:10]}...</div>
+                    </td>""")
         
-        html += f"""
-            </div>
+        if insight_cells:
+            html += f"""
+        <div class="section">
+            <h3 class="section-title">💡 Insights</h3>
+            <table class="insight-table">
+                <tr>
+                    {"".join(insight_cells)}
+                </tr>
+            </table>
         </div>
 """
     except Exception as e:
@@ -974,20 +1090,20 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
     html += f"""
         
         <!-- Per-List Breakdown -->
-        <div class="list-section">
-            <h2>📋 List Breakdown ({num_lists} lists)</h2>
+        <div class="section">
+            <h3 class="section-title">📋 List Breakdown ({num_lists} lists)</h3>
 """
     
     # Check if we have list data
     if len(list_breakdown) == 0:
         html += f"""
-            <div style="background: #2a2a2a; padding: 30px; border-radius: 8px; text-align: center; opacity: 0.7;">
-                <p style="margin: 0;">No per-list data available yet. List breakdown will appear after the first sync completes.</p>
+            <div style="background: #fafbfc; padding: 24px; border-radius: 6px; text-align: center; border: 1px solid #e1e4e8;">
+                <p style="margin: 0; color: #586069;">No per-list data available yet. List breakdown will appear after the first sync completes.</p>
             </div>
 """
     else:
         html += f"""
-            <p style="opacity: 0.7; margin-bottom: 20px;">Sorted by coverage (lowest first)</p>
+            <p style="color: #586069; margin-bottom: 16px; font-size: 13px;">Sorted by coverage (lowest first)</p>
 """
     
     # Add each list
@@ -995,12 +1111,10 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
         # Handle lists that haven't been synced yet
         if lst.get('not_synced', False):
             html += f"""
-            <div class="list-item" style="opacity: 0.6;">
-                <div class="list-header">
-                    <div class="list-name">📋 {lst['name']}</div>
-                    <div class="list-stats" style="opacity: 0.7;">Not synced yet</div>
-                </div>
-                <div style="padding: 10px 0; opacity: 0.7; font-size: 13px;">
+            <div class="list-item" style="opacity: 0.5;">
+                <div class="list-name">📋 {lst['name']}</div>
+                <div class="list-stats">Not synced yet</div>
+                <div style="padding: 8px 0; color: #959da5; font-size: 13px;">
                     ⏳ This list will be populated after the next sync
                 </div>
             </div>
@@ -1013,17 +1127,17 @@ def _generate_html(sync_results, list_breakdown: List[Dict], max_items_per_categ
             # Generate detailed breakdown with movie titles and optional Seerr links
             missing_items_html = _generate_missing_items_html(lst['missing_details'], max_items=max_items_per_category, overseerr_url=overseerr_url)
         
+        # Choose progress bar color based on coverage
+        bar_color = '#28a745' if lst['coverage_pct'] >= 80 else '#f9a825' if lst['coverage_pct'] >= 50 else '#e53935'
+        
         html += f"""
             <div class="list-item">
-                <div class="list-header">
-                    <div class="list-name">📋 {lst['name']}</div>
-                    <div class="list-stats">{lst['in_library']}/{lst['total']} in library</div>
-                </div>
+                <div class="list-name">📋 {lst['name']}</div>
+                <div class="list-stats">{lst['in_library']}/{lst['total']} in library</div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: {lst['coverage_pct']:.1f}%">
-                        {lst['coverage_pct']:.1f}%
-                    </div>
+                    <div class="progress-fill" style="width: {lst['coverage_pct']:.1f}%; background-color: {bar_color};"></div>
                 </div>
+                <div class="progress-text">{lst['coverage_pct']:.1f}% coverage &middot; {lst['missing']} missing</div>
                 {missing_items_html}
             </div>
 """
