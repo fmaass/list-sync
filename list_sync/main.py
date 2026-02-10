@@ -1281,6 +1281,13 @@ def automated_sync(
                     return False
             
             # Regular full sync (if no single sync was triggered or if force_full_sync is True)
+            # Refresh blocklist from Radarr before each sync
+            try:
+                from .blocklist import refresh_blocklist_from_radarr
+                refresh_blocklist_from_radarr()
+            except Exception as e:
+                logging.warning(f"Blocklist refresh from Radarr failed: {e}")
+            
             # Use run_sync() for full syncs to leverage existing tracking and logic
             logging.info("Starting full sync operation")
             
