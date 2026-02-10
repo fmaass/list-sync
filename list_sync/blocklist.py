@@ -280,6 +280,74 @@ class BlocklistManager:
             days = int(hours / 24)
             return f"{days} days"
     
+    def refresh_from_radarr(self) -> bool:
+        """
+        Fetch current exclusions from Radarr API and update the blocklist JSON file.
+        This ensures the blocklist is always in sync with Radarr's exclusion list.
+        
+        Requires RADARR_URL and RADARR_API_KEY environment variables.
+        
+        Returns:
+            True if refreshed successfully, False otherwise
+        """
+        radarr_url = os.getenv('RADARR_URL', '').rstrip('/')
+        radarr_api_key = os.getenv('RADARR_API_KEY', '')
+        
+        if not radarr_url or not radarr_api_key:
+            logger.debug("RADARR_URL or RADARR_API_KEY not set, skipping Radarr refresh")
+            return False
+        
+        try:
+            import requests
+            from datetime import datetime as dt
+            
+            url = f"{radarr_url}/api/v3/exclusions"
+            logger.info(f"Refreshing blocklist from Radarr ({url})")
+            
+            resp = requests.get(
+                url,
+                headers={'X-Api-Key': radarr_api_key},
+                timeout=30
+            )
+            resp.raise_for_status()
+            exclusions = resp.json()
+            
+            # Extract TMDB IDs
+            movie_ids = sorted(set(
+                item['tmdbId'] for item in exclusions if 'tmdbId' in item
+            ))
+            
+            # Build output
+            output = {
+                'version': '1.0',
+                'exported_at': dt.utcnow().isoformat() + 'Z',
+                'source': 'radarr',
+                'movies': movie_ids,
+                'tv': [],
+            }
+            
+            # Write to file
+            with open(self.blocklist_path, 'w') as f:
+                json.dump(output, f, indent=2)
+            
+            old_count = len(self.movie_blocklist)
+            
+            # Reload in memory
+            self.load(force=True)
+            
+            new_count = len(self.movie_blocklist)
+            if new_count != old_count:
+                logger.info(f"Blocklist updated from Radarr: {old_count} → {new_count} movies")
+            else:
+                logger.info(f"Blocklist refreshed from Radarr: {new_count} movies (no changes)")
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to refresh blocklist from Radarr: {e}")
+            logger.warning("Continuing with existing blocklist")
+            return False
+
     def reload(self) -> bool:
         """
         Force reload blocklist from file.
@@ -344,6 +412,17 @@ def is_blocked(tmdb_id: int, media_type: str) -> bool:
     """
     manager = get_blocklist_manager()
     return manager.is_blocked(tmdb_id, media_type)
+
+
+def refresh_blocklist_from_radarr() -> bool:
+    """
+    Refresh blocklist from Radarr API using global manager.
+    
+    Returns:
+        True if refreshed successfully
+    """
+    manager = get_blocklist_manager()
+    return manager.refresh_from_radarr()
 
 
 def get_blocklist_stats() -> Dict[str, Any]:
