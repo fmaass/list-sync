@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet
 logger = logging.getLogger(__name__)
 
 # Path to persistent encryption key file (in mounted volume)
-ENCRYPTION_KEY_FILE = Path("/usr/src/app/data/.encryption_key")
+ENCRYPTION_KEY_FILE = Path("/data/.encryption_key")
 
 # Cache the key in memory to avoid repeated file reads
 _cached_key = None
