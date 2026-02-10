@@ -95,6 +95,24 @@ def remove_simkl_column():
         else:
             logging.info("simkl_id column does not exist in synced_items table")
 
+def migrate_list_name_column():
+    """Add list_name column to lists table if it doesn't exist."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        
+        # Check if list_name column exists
+        cursor.execute("PRAGMA table_info(lists)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'list_name' not in columns:
+            try:
+                cursor.execute('ALTER TABLE lists ADD COLUMN list_name TEXT')
+                conn.commit()
+                logging.info("Added list_name column to lists table")
+            except sqlite3.OperationalError as e:
+                logging.warning(f"Could not add list_name column: {e}")
+
+
 def migrate_list_urls():
     """Migrate existing lists to populate missing URLs and add item_count and last_synced columns."""
     from .utils.helpers import construct_list_url
