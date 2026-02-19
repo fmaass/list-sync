@@ -440,6 +440,84 @@ class BlocklistManager:
             logger.warning("Continuing with existing blocklist")
             return False
 
+    def refresh_from_seerr(self) -> bool:
+        """
+        Fetch blocklist from Seerr API and update the blocklist JSON file.
+        Seerr is the single source of truth — it aggregates Radarr exclusions,
+        Sonarr exclusions, and manual blocks.
+        
+        Uses OVERSEERR_URL and OVERSEERR_API_KEY environment variables
+        (already configured for ListSync's normal operation).
+        
+        Returns:
+            True if refreshed successfully, False otherwise
+        """
+        seerr_url = os.getenv('OVERSEERR_URL', '').rstrip('/')
+        seerr_api_key = os.getenv('OVERSEERR_API_KEY', '')
+        
+        if not seerr_url or not seerr_api_key:
+            logger.debug("OVERSEERR_URL or OVERSEERR_API_KEY not set, skipping Seerr refresh")
+            return False
+        
+        try:
+            import requests
+            from datetime import datetime as dt
+            
+            url = f"{seerr_url}/api/v1/blocklist"
+            logger.info(f"Refreshing blocklist from Seerr ({url})")
+            
+            resp = requests.get(
+                url,
+                headers={'X-Api-Key': seerr_api_key},
+                params={'take': 10000, 'skip': 0, 'filter': 'all'},
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            results = data.get('results', [])
+            
+            movie_ids = sorted(set(
+                item['tmdbId'] for item in results
+                if item.get('mediaType') == 'movie' and 'tmdbId' in item
+            ))
+            tv_ids = sorted(set(
+                item['tmdbId'] for item in results
+                if item.get('mediaType') == 'tv' and 'tmdbId' in item
+            ))
+            
+            output = {
+                'version': '1.0',
+                'exported_at': dt.utcnow().isoformat() + 'Z',
+                'source': 'seerr',
+                'movies': movie_ids,
+                'tv': tv_ids,
+            }
+            
+            with open(self.blocklist_path, 'w') as f:
+                json.dump(output, f, indent=2)
+            
+            old_movie_count = len(self.movie_blocklist)
+            old_tv_count = len(self.tv_blocklist)
+            
+            self.load(force=True)
+            
+            new_movie_count = len(self.movie_blocklist)
+            new_tv_count = len(self.tv_blocklist)
+            
+            logger.info(
+                f"Blocklist refreshed from Seerr: "
+                f"{new_movie_count} movies (was {old_movie_count}), "
+                f"{new_tv_count} TV (was {old_tv_count})"
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to refresh blocklist from Seerr: {e}")
+            logger.warning("Continuing with existing blocklist")
+            return False
+
     def reload(self) -> bool:
         """
         Force reload blocklist from file.
@@ -509,12 +587,25 @@ def is_blocked(tmdb_id: int, media_type: str) -> bool:
 def refresh_blocklist_from_radarr() -> bool:
     """
     Refresh blocklist from Radarr API using global manager.
+    Deprecated: use refresh_blocklist_from_seerr() instead.
     
     Returns:
         True if refreshed successfully
     """
     manager = get_blocklist_manager()
     return manager.refresh_from_radarr()
+
+
+def refresh_blocklist_from_seerr() -> bool:
+    """
+    Refresh blocklist from Seerr API using global manager.
+    Seerr is the single source of truth for all blocklists.
+    
+    Returns:
+        True if refreshed successfully
+    """
+    manager = get_blocklist_manager()
+    return manager.refresh_from_seerr()
 
 
 def get_blocklist_stats() -> Dict[str, Any]:
