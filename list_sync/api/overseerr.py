@@ -357,12 +357,21 @@ class OverseerrClient:
                 media = req.get('media', {})
                 requested_by = req.get('requestedBy', {})
                 
+                title = media.get('title') or media.get('name') or None
+                year = media.get('releaseDate', '')[:4] if media.get('releaseDate') else None
+                tmdb_id = media.get('tmdbId')
+                media_type = req.get('type', 'movie')
+                
+                # If title is missing, try to fetch from Jellyseerr's media info endpoint
+                if not title and tmdb_id:
+                    title, year = self._resolve_media_title(tmdb_id, media_type, year)
+                
                 pending_requests.append({
                     'id': req.get('id'),
-                    'title': media.get('title') or media.get('name', 'Unknown'),
-                    'year': media.get('releaseDate', '')[:4] if media.get('releaseDate') else None,
-                    'media_type': req.get('type', 'movie'),
-                    'tmdb_id': media.get('tmdbId'),
+                    'title': title or 'Unknown',
+                    'year': year,
+                    'media_type': media_type,
+                    'tmdb_id': tmdb_id,
                     'status': req.get('status'),  # 1 = pending approval
                     'requested_by_id': requested_by.get('id'),
                     'requested_by_name': requested_by.get('displayName', 'Unknown'),
@@ -375,6 +384,59 @@ class OverseerrClient:
         except Exception as e:
             logging.error(f"Failed to get pending requests: {e}")
             return []
+    
+    def _resolve_media_title(self, tmdb_id: int, media_type: str, fallback_year: Optional[str] = None) -> tuple:
+        """
+        Resolve a media title from Jellyseerr or TMDB when the request object is missing it.
+        
+        Args:
+            tmdb_id: TMDB ID
+            media_type: 'movie' or 'tv'
+            fallback_year: Year to use if we can't resolve one
+            
+        Returns:
+            Tuple of (title, year) - either or both may be None
+        """
+        title = None
+        year = fallback_year
+        
+        # Strategy 1: Ask Jellyseerr for media details
+        try:
+            media_endpoint = 'movie' if media_type == 'movie' else 'tv'
+            media_url = f"{self.overseerr_url}/api/v1/{media_endpoint}/{tmdb_id}"
+            resp = requests.get(media_url, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                media_data = resp.json()
+                title = media_data.get('title') or media_data.get('name') or media_data.get('originalTitle')
+                if not year:
+                    release = media_data.get('releaseDate') or media_data.get('firstAirDate', '')
+                    year = release[:4] if release else None
+                if title:
+                    logging.debug(f"Resolved title from Jellyseerr: {title} ({year})")
+                    return title, year
+        except Exception as e:
+            logging.debug(f"Failed to resolve title from Jellyseerr for TMDB {tmdb_id}: {e}")
+        
+        # Strategy 2: Fall back to TMDB API directly
+        try:
+            import os
+            tmdb_key = os.getenv('TMDB_KEY', '')
+            if tmdb_key:
+                tmdb_type = 'movie' if media_type == 'movie' else 'tv'
+                tmdb_url = f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}"
+                resp = requests.get(tmdb_url, params={'api_key': tmdb_key}, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    title = data.get('title') or data.get('name')
+                    if not year:
+                        release = data.get('release_date') or data.get('first_air_date', '')
+                        year = release[:4] if release else None
+                    if title:
+                        logging.debug(f"Resolved title from TMDB: {title} ({year})")
+        except Exception as e:
+            logging.debug(f"Failed to resolve title from TMDB for {tmdb_id}: {e}")
+        
+        return title, year
     
     def extract_number_of_seasons(self, media_data):
         """

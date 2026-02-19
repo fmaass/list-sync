@@ -1802,7 +1802,15 @@ async def test_database():
 
 @app.get("/api/system/health")
 async def get_health_check():
-    """Simple health check endpoint"""
+    """
+    Health check endpoint following industry conventions.
+    
+    Returns HTTP 200 with status "UP" when healthy, HTTP 503 with status "DOWN" when not.
+    Uptime Kuma keyword monitor should check for "UP" in the response body.
+    
+    Response format follows Spring Boot Actuator / Kubernetes conventions:
+      {"status": "UP", "checks": {...}}
+    """
     try:
         # Check database
         db_result = await test_database()
@@ -1815,15 +1823,59 @@ async def get_health_check():
         # Parse logs for sync status
         log_info = parse_log_for_sync_info()
         
-        return {
-            "database": db_connected,
-            "process": process_running,
-            "sync_status": log_info.sync_status,
-            "last_sync": log_info.last_sync_complete,
-            "next_sync": log_info.next_sync_time
+        # If log parsing couldn't find sync_interval, fall back to SYNC_INTERVAL env var
+        sync_interval = log_info.sync_interval_hours
+        if not sync_interval:
+            sync_interval = float(os.getenv('SYNC_INTERVAL', '0') or '0')
+        
+        # Recalculate next_sync and sync_status if we now have the interval
+        last_sync = log_info.last_sync_complete
+        next_sync = log_info.next_sync_time
+        sync_status = log_info.sync_status
+        
+        if last_sync and sync_interval and sync_interval > 0 and sync_status == 'unknown':
+            try:
+                last_sync_dt = datetime.fromisoformat(last_sync)
+                next_sync_dt = last_sync_dt + timedelta(hours=sync_interval)
+                next_sync = next_sync_dt.isoformat()
+                
+                now = datetime.now()
+                grace = timedelta(minutes=10)
+                if now > (next_sync_dt + grace):
+                    sync_status = 'overdue'
+                elif now > next_sync_dt:
+                    sync_status = 'due'
+                else:
+                    sync_status = 'scheduled'
+            except Exception:
+                pass
+        
+        is_healthy = db_connected and process_running
+        status_code = 200 if is_healthy else 503
+        
+        body = {
+            "status": "UP" if is_healthy else "DOWN",
+            "checks": {
+                "database": "UP" if db_connected else "DOWN",
+                "process": "UP" if process_running else "DOWN",
+            },
+            "sync": {
+                "status": sync_status,
+                "last_sync": last_sync,
+                "next_sync": next_sync,
+                "interval_hours": sync_interval if sync_interval else None,
+            }
         }
+        
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=body, status_code=status_code)
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content={"status": "DOWN", "error": str(e)},
+            status_code=503
+        )
 
 
 # ============================================================================

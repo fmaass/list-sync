@@ -4,11 +4,113 @@ MDBList provider for ListSync.
 
 import logging
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from seleniumbase import SB
 
 from . import register_provider
+
+logger = logging.getLogger(__name__)
+
+# Cache for list names to avoid repeated HTTP requests during report generation
+_list_name_cache: Dict[str, str] = {}
+
+
+def get_mdblist_list_name(list_url: str) -> Optional[str]:
+    """
+    Fetch the actual human-readable name of an MDBList list from its URL.
+    
+    Uses the MDBList API (no auth required) to resolve list metadata.
+    Falls back to scraping the page title if the API doesn't work.
+    
+    Args:
+        list_url: Full MDBList URL, e.g. https://mdblist.com/lists/moviemarder/external/66765
+        
+    Returns:
+        Human-readable list name, or None if it couldn't be resolved
+    """
+    # Check cache first
+    if list_url in _list_name_cache:
+        return _list_name_cache[list_url]
+    
+    try:
+        import requests as http_requests
+        
+        # Normalize URL
+        url = list_url.strip().rstrip('/')
+        
+        # Strategy 1: Fetch the page and extract the title from the HTML
+        # MDBList pages have a <title> like "List Name - MDBList" or 
+        # an <h1> with the list name
+        try:
+            resp = http_requests.get(url, timeout=10, headers={
+                'User-Agent': 'ListSync/1.0 (report generator)'
+            })
+            if resp.status_code == 200:
+                html = resp.text
+                
+                # Try <title> tag: "List Name - MDBList"
+                title_match = re.search(r'<title>(.+?)\s*[-–|]\s*MDBList</title>', html, re.IGNORECASE)
+                if title_match:
+                    name = title_match.group(1).strip()
+                    if name and name.lower() not in ('mdblist', '404', 'not found'):
+                        _list_name_cache[list_url] = name
+                        logger.info(f"Resolved MDBList name: {list_url} -> '{name}'")
+                        return name
+                
+                # Try <h1> or heading elements
+                h1_match = re.search(r'<h1[^>]*>([^<]+)</h1>', html, re.IGNORECASE)
+                if h1_match:
+                    name = h1_match.group(1).strip()
+                    if name and len(name) > 2:
+                        _list_name_cache[list_url] = name
+                        logger.info(f"Resolved MDBList name from h1: {list_url} -> '{name}'")
+                        return name
+                        
+                # Try og:title meta tag
+                og_match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+                if og_match:
+                    name = og_match.group(1).strip()
+                    if name and name.lower() not in ('mdblist',):
+                        # Remove " - MDBList" suffix if present
+                        name = re.sub(r'\s*[-–|]\s*MDBList$', '', name, flags=re.IGNORECASE).strip()
+                        if name:
+                            _list_name_cache[list_url] = name
+                            logger.info(f"Resolved MDBList name from og:title: {list_url} -> '{name}'")
+                            return name
+                            
+        except http_requests.RequestException as e:
+            logger.debug(f"HTTP request failed for list name resolution: {e}")
+        
+        # Strategy 2: Try MDBList API if URL has a recognizable format
+        # https://mdblist.com/lists/username/listname -> API: https://mdblist.com/api/lists/username/listname
+        # For /external/ URLs this might not work but worth trying
+        try:
+            import os
+            api_key = os.getenv('MDBLIST_API_KEY', '')
+            if api_key:
+                # Extract list path from URL
+                path_match = re.search(r'mdblist\.com/lists/(.+?)/?$', url)
+                if path_match:
+                    list_path = path_match.group(1)
+                    api_url = f"https://mdblist.com/api/lists/{list_path}?apikey={api_key}"
+                    api_resp = http_requests.get(api_url, timeout=10)
+                    if api_resp.status_code == 200:
+                        data = api_resp.json()
+                        name = data.get('name') or data.get('title')
+                        if name:
+                            _list_name_cache[list_url] = name
+                            logger.info(f"Resolved MDBList name from API: {list_url} -> '{name}'")
+                            return name
+        except Exception as e:
+            logger.debug(f"MDBList API lookup failed: {e}")
+        
+        logger.warning(f"Could not resolve list name for: {list_url}")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Error resolving MDBList list name: {e}")
+        return None
 
 
 @register_provider("mdblist")

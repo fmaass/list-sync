@@ -4,15 +4,19 @@ Blocklist Manager for List-Sync
 Manages loading and checking blocklist to prevent requesting blocked media.
 
 This module:
-1. Loads blocklist from JSON file exported by Seerr
-2. Caches blocklist in memory for fast lookups
-3. Provides is_blocked() check for media items
-4. Handles graceful fallback if blocklist is missing
+1. Loads blocklist from JSON file exported by Seerr / synced from Radarr exclusions
+2. Loads optional permanent manual blocklist (survives Radarr sync refreshes)
+3. Caches blocklist in memory for fast lookups
+4. Provides is_blocked() check for media items
+5. Handles graceful fallback if blocklist is missing
 
 Environment Variables:
     BLOCKLIST_ENABLED: Enable/disable blocklist (default: true)
     BLOCKLIST_FILE: Path to blocklist JSON (default: data/blocklist.json)
+    MANUAL_BLOCKLIST_FILE: Path to manual/permanent blocklist JSON (default: data/manual_blocklist.json)
     BLOCKLIST_RELOAD_HOURS: Hours before reloading (default: 24)
+    BLOCK_DOCUMENTARIES: Block documentary genre via TMDB API (default: false)
+    TMDB_KEY: TMDB API key (required for BLOCK_DOCUMENTARIES)
 """
 
 import json
@@ -31,6 +35,7 @@ class BlocklistManager:
     def __init__(
         self,
         blocklist_path: Optional[str] = None,
+        manual_blocklist_path: Optional[str] = None,
         enabled: Optional[bool] = None,
         reload_hours: int = 24
     ):
@@ -38,7 +43,8 @@ class BlocklistManager:
         Initialize blocklist manager.
         
         Args:
-            blocklist_path: Path to blocklist JSON file
+            blocklist_path: Path to blocklist JSON file (synced from Radarr)
+            manual_blocklist_path: Path to manual/permanent blocklist JSON
             enabled: Enable/disable blocklist checking
             reload_hours: Hours before auto-reloading blocklist
         """
@@ -46,6 +52,10 @@ class BlocklistManager:
         self.blocklist_path = Path(
             blocklist_path or 
             os.getenv('BLOCKLIST_FILE', 'data/blocklist.json')
+        )
+        self.manual_blocklist_path = Path(
+            manual_blocklist_path or
+            os.getenv('MANUAL_BLOCKLIST_FILE', 'data/manual_blocklist.json')
         )
         self.enabled = (
             enabled if enabled is not None
@@ -56,12 +66,17 @@ class BlocklistManager:
         # State
         self.movie_blocklist: Set[int] = set()
         self.tv_blocklist: Set[int] = set()
+        # Manual blocklist items (kept separate so Radarr refresh doesn't overwrite them)
+        self.manual_movie_blocklist: Set[int] = set()
+        self.manual_tv_blocklist: Set[int] = set()
         self.loaded_at: Optional[datetime] = None
         self.version: Optional[str] = None
         self.source: Optional[str] = None
         self.total_count: int = 0
         
         logger.info(f"BlocklistManager initialized (enabled={self.enabled}, path={self.blocklist_path})")
+        if self.manual_blocklist_path.exists():
+            logger.info(f"Manual blocklist found: {self.manual_blocklist_path}")
     
     def load(self, force: bool = False) -> bool:
         """
@@ -107,14 +122,22 @@ class BlocklistManager:
             self.loaded_at = datetime.now()
             self.version = data.get('version', 'unknown')
             self.source = data.get('source', 'unknown')
-            self.total_count = len(self.movie_blocklist) + len(self.tv_blocklist)
             
             # Log success
             exported_at = data.get('exported_at', 'unknown')
             logger.info(f"✅ Loaded blocklist from {self.blocklist_path}")
             logger.info(f"   Version: {self.version}, Source: {self.source}")
             logger.info(f"   Exported: {exported_at}")
-            logger.info(f"   Movies: {len(self.movie_blocklist)}, TV: {len(self.tv_blocklist)}, Total: {self.total_count}")
+            logger.info(f"   Movies: {len(self.movie_blocklist)}, TV: {len(self.tv_blocklist)}")
+            
+            # Load manual blocklist (permanent items that survive Radarr refresh)
+            self._load_manual_blocklist()
+            
+            self.total_count = (
+                len(self.movie_blocklist) + len(self.tv_blocklist) +
+                len(self.manual_movie_blocklist) + len(self.manual_tv_blocklist)
+            )
+            logger.info(f"   Total (incl. manual): {self.total_count}")
             
             return True
             
@@ -125,6 +148,42 @@ class BlocklistManager:
         except Exception as e:
             logger.error(f"Failed to load blocklist: {e}")
             logger.warning("Continuing without blocklist - all items will be processed")
+            return False
+    
+    def _load_manual_blocklist(self) -> bool:
+        """
+        Load the manual/permanent blocklist.
+        
+        This is a separate file from the Radarr-synced blocklist, so items added
+        here won't be overwritten when the Radarr blocklist is refreshed.
+        
+        Format: {"movies": [tmdb_id, ...], "tv": [tmdb_id, ...]}
+        
+        Returns:
+            True if loaded successfully
+        """
+        try:
+            if not isinstance(self.manual_blocklist_path, Path):
+                self.manual_blocklist_path = Path(self.manual_blocklist_path)
+            
+            if not self.manual_blocklist_path.exists():
+                logger.debug(f"No manual blocklist at {self.manual_blocklist_path}")
+                return False
+            
+            with open(self.manual_blocklist_path, 'r') as f:
+                data = json.load(f)
+            
+            self.manual_movie_blocklist = set(data.get('movies', []))
+            self.manual_tv_blocklist = set(data.get('tv', []))
+            
+            total = len(self.manual_movie_blocklist) + len(self.manual_tv_blocklist)
+            if total > 0:
+                logger.info(f"✅ Loaded manual blocklist: {len(self.manual_movie_blocklist)} movies, {len(self.manual_tv_blocklist)} TV")
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to load manual blocklist: {e}")
             return False
     
     def is_documentary(self, tmdb_id: int, media_type: str) -> bool:
@@ -149,31 +208,46 @@ class BlocklistManager:
             # Get TMDB API key from environment
             tmdb_key = os.getenv('TMDB_KEY', '')
             if not tmdb_key:
-                logger.debug("TMDB_KEY not configured, cannot check documentary genre")
+                logger.warning(
+                    "BLOCK_DOCUMENTARIES is enabled but TMDB_KEY is not set! "
+                    "Documentary filtering will not work without a TMDB API key."
+                )
                 return False
             
             # Query TMDB for genres
             url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
             params = {'api_key': tmdb_key}
             
-            response = requests.get(url, params=params, timeout=5)
+            response = requests.get(url, params=params, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
                 genres = data.get('genres', [])
+                genre_names = [g.get('name', '') for g in genres]
+                title = data.get('title', data.get('name', 'Unknown'))
                 
                 # Documentary genre ID: 99 for movies, 99 for TV as well
                 is_doc = any(g.get('id') == 99 for g in genres)
                 
                 if is_doc:
-                    logger.info(f"🎬 Documentary detected: {data.get('title', data.get('name', 'Unknown'))} (TMDB: {tmdb_id})")
+                    logger.info(f"🎬 Documentary detected and BLOCKED: '{title}' (TMDB: {tmdb_id}, genres: {genre_names})")
+                else:
+                    logger.debug(f"Not a documentary: '{title}' (TMDB: {tmdb_id}, genres: {genre_names})")
                 
                 return is_doc
             
-            return False
+            elif response.status_code == 401:
+                logger.error(f"TMDB API key is invalid (401 Unauthorized). Documentary filtering disabled.")
+                return False
+            else:
+                logger.warning(f"TMDB API returned {response.status_code} for {media_type}/{tmdb_id}")
+                return False
             
+        except requests.Timeout:
+            logger.warning(f"TMDB API timeout checking documentary genre for {media_type}/{tmdb_id}")
+            return False
         except Exception as e:
-            logger.debug(f"Error checking documentary genre: {e}")
+            logger.warning(f"Error checking documentary genre for {media_type}/{tmdb_id}: {e}")
             return False
     
     def is_blocked(self, tmdb_id: int, media_type: str) -> bool:
@@ -205,9 +279,17 @@ class BlocklistManager:
         # Check Radarr exclusion blocklist
         if media_type == 'movie':
             if tmdb_id in self.movie_blocklist:
+                logger.debug(f"Blocked by Radarr exclusions: TMDB {tmdb_id}")
+                return True
+            if tmdb_id in self.manual_movie_blocklist:
+                logger.debug(f"Blocked by manual blocklist: TMDB {tmdb_id}")
                 return True
         elif media_type == 'tv':
             if tmdb_id in self.tv_blocklist:
+                logger.debug(f"Blocked by Radarr exclusions: TMDB {tmdb_id}")
+                return True
+            if tmdb_id in self.manual_tv_blocklist:
+                logger.debug(f"Blocked by manual blocklist: TMDB {tmdb_id}")
                 return True
         
         # Check documentary filter (if enabled)
@@ -242,6 +324,10 @@ class BlocklistManager:
         if not isinstance(self.blocklist_path, Path):
             self.blocklist_path = Path(self.blocklist_path)
         
+        # Ensure paths are Path objects
+        if not isinstance(self.manual_blocklist_path, Path):
+            self.manual_blocklist_path = Path(self.manual_blocklist_path)
+        
         return {
             'enabled': self.enabled,
             'loaded': self.loaded_at is not None,
@@ -253,7 +339,13 @@ class BlocklistManager:
             'source': self.source,
             'movie_count': len(self.movie_blocklist),
             'tv_count': len(self.tv_blocklist),
+            'manual_movie_count': len(self.manual_movie_blocklist),
+            'manual_tv_count': len(self.manual_tv_blocklist),
+            'manual_blocklist_path': str(self.manual_blocklist_path),
+            'manual_blocklist_exists': self.manual_blocklist_path.exists(),
             'total_count': self.total_count,
+            'block_documentaries': os.getenv('BLOCK_DOCUMENTARIES', 'false').lower() == 'true',
+            'tmdb_key_set': bool(os.getenv('TMDB_KEY', '')),
             'reload_hours': self.reload_hours,
             'should_reload': self.should_reload()
         }
