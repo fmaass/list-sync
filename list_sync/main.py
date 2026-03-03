@@ -660,6 +660,26 @@ def process_media_item(item: Dict[str, Any], overseerr_client: OverseerrClient, 
             
             logging.info(f"📊 MATCH SUMMARY: Method={match_method}, Overseerr_ID={overseerr_id}")
             
+            # POST-RESOLUTION BLOCKLIST + DOCUMENTARY CHECK
+            # The early check at line ~528 only works when the provider supplies a
+            # tmdb_id up front. Most providers (MDBList) don't, so we must re-check
+            # here after TMDB ID resolution to catch blocklisted/documentary items.
+            resolved_tmdb = tmdb_id or overseerr_id
+            if resolved_tmdb:
+                from .blocklist import is_blocked
+                try:
+                    resolved_tmdb_int = int(resolved_tmdb)
+                    if is_blocked(resolved_tmdb_int, media_type):
+                        logging.info(f"⛔ BLOCKED (post-resolution): '{title}' (TMDB: {resolved_tmdb_int}) - on blocklist or documentary, skipping")
+                        source_lists = get_source_lists_from_item(item, list_type, list_id)
+                        for source_list in source_lists:
+                            save_sync_result(title, media_type, imdb_id, None,
+                                           "blocked", year, resolved_tmdb_int,
+                                           source_list['type'], source_list['id'])
+                        return {"title": title, "status": "blocked", "year": year, "media_type": media_type}
+                except (ValueError, TypeError):
+                    pass
+            
             # Get list information from item using helper function
             source_lists = get_source_lists_from_item(item, list_type, list_id)
             

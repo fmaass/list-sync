@@ -14,6 +14,14 @@
 
 ---
 
+> **Homelab fork:** This is a custom fork with Seerr blocklist integration and email
+> reporting. Before making changes to blocklist-related code, read the
+> **[Blocklist Pipeline Architecture](../portainer-stacks/BLOCKLIST_ARCHITECTURE.md)** document
+> in the portainer-stacks repo — it covers the full cross-project pipeline between Seerr,
+> ListSync, Radarr, and Sonarr.
+
+---
+
 ## 🍿 What is ListSync? 
 
 ListSync automatically syncs your watchlists from IMDb, Trakt and many more with Overseerr/Jellyseerr. No more manual adding - just add movies, shows, and anime to your favorite watchlist, and they'll appear in your media server automatically.
